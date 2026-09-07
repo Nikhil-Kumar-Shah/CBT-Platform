@@ -336,3 +336,61 @@ def test_12_no_passwords_or_hashes_in_audit_logs(client: TestClient, db_session:
         desc = entry.description or ""
         assert plain_secret not in desc, f"Plaintext password leaked in audit log: {desc}"
         assert "$argon2" not in desc, f"Argon2 hash leaked in audit log description: {desc}"
+
+
+def test_13_change_password_with_warmed_session_cache_and_wrong_password_handling(client: TestClient, db_session: Session):
+    """TEST 13: Verify change-password succeeds when session cache is warm (detached instance regression)
+
+    and verify incorrect current password returns 400 Bad Request instead of unhandled 500.
+    """
+    initial_password = "AdminSecure123!"
+    new_password = "BrandNewSuperSecret2026!@"
+
+    # 1. Login
+    login_res = client.post(
+        "/api/v1/auth/login",
+        json={"username_or_email": "admin", "password": initial_password},
+    )
+    assert login_res.status_code == 200
+
+    # 2. Warm up _SESSION_CACHE by hitting /auth/me multiple times
+    me_res1 = client.get("/api/v1/auth/me")
+    assert me_res1.status_code == 200
+    me_res2 = client.get("/api/v1/auth/me")
+    assert me_res2.status_code == 200
+
+    # 3. Attempt with incorrect current password -> MUST return 400 Bad Request (NOT 500)
+    wrong_pwd_res = client.post(
+        "/api/v1/auth/change-password",
+        json={"current_password": "WrongCurrentPassword123!", "new_password": new_password},
+    )
+    assert wrong_pwd_res.status_code == 400
+    assert "Incorrect current password" in wrong_pwd_res.json()["detail"]
+
+    # 4. Attempt with correct current password with warm cache -> MUST return 200 OK (NOT 500)
+    success_res = client.post(
+        "/api/v1/auth/change-password",
+        json={"current_password": initial_password, "new_password": new_password},
+    )
+    assert success_res.status_code == 200
+    assert success_res.json()["message"] == "Password changed successfully."
+
+    # 5. Subsequent request with newly issued cookie succeeds immediately
+    me_res3 = client.get("/api/v1/auth/me")
+    assert me_res3.status_code == 200
+    assert me_res3.json()["username"] == "admin"
+
+    # 6. Fresh client with new password succeeds, old password fails
+    fresh_client = TestClient(client.app)
+    old_res = fresh_client.post(
+        "/api/v1/auth/login",
+        json={"username_or_email": "admin", "password": initial_password},
+    )
+    assert old_res.status_code == 401
+
+    new_res = fresh_client.post(
+        "/api/v1/auth/login",
+        json={"username_or_email": "admin", "password": new_password},
+    )
+    assert new_res.status_code == 200
+

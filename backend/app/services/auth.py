@@ -19,8 +19,10 @@ from backend.app.models.session import UserSession
 from backend.app.schemas.auth import UserCreate, UserUpdate
 
 # Thread-safe in-memory session cache to eliminate redundant remote DB round-trips (TTL 120s)
-_SESSION_CACHE: Dict[str, Tuple[User, float]] = {}
+# Caches session_token_hash -> (user_id: uuid.UUID, expiry_timestamp: float)
+_SESSION_CACHE: Dict[str, Tuple[uuid.UUID, float]] = {}
 _SESSION_CACHE_LOCK = threading.Lock()
+
 
 
 class AuthenticationError(Exception):
@@ -118,7 +120,7 @@ class AuthService:
                 th = hash_session_token(raw_token)
                 _SESSION_CACHE.pop(th, None)
             elif user_id:
-                to_del = [k for k, (u, _) in _SESSION_CACHE.items() if getattr(u, "id", None) == user_id]
+                to_del = [k for k, (uid, _) in _SESSION_CACHE.items() if uid == user_id]
                 for k in to_del:
                     _SESSION_CACHE.pop(k, None)
             else:
@@ -129,10 +131,11 @@ class AuthService:
         """Validate a presented raw session token with high-performance in-memory TTL cache (120s).
 
         Checks:
-        1. Fast in-memory cache lookup (< 0.05ms, 0 DB queries)
-        2. Single query with joinedload(UserSession.user) on cache miss
-        3. Session is not revoked & not expired
-        4. Associated user exists and is ACTIVE
+        1. Fast in-memory cache lookup for user_id (< 0.05ms)
+        2. Retrieves live, attached User instance from current db Session
+        3. Single query with joinedload(UserSession.user) on cache miss
+        4. Session is not revoked & not expired
+        5. Associated user exists and is ACTIVE
         """
         if not raw_token:
             return None
@@ -144,12 +147,12 @@ class AuthService:
         with _SESSION_CACHE_LOCK:
             cached = _SESSION_CACHE.get(token_hash)
             if cached:
-                user, exp_ts = cached
+                user_id, exp_ts = cached
                 if now_ts < exp_ts:
-                    if user and getattr(user, "status", None) == "ACTIVE":
+                    user = db.get(User, user_id)
+                    if user and user.status == "ACTIVE":
                         return user
-                else:
-                    _SESSION_CACHE.pop(token_hash, None)
+                _SESSION_CACHE.pop(token_hash, None)
 
         now = datetime.now(timezone.utc)
 
@@ -177,11 +180,11 @@ class AuthService:
             logger.warning("Session validation failed: user missing or not active")
             return None
 
-        # Cache valid user for 120s (or remaining session time)
+        # Cache valid user_id for 120s (or remaining session time)
         session_remaining = (session.expires_at - now).total_seconds()
         ttl = min(120.0, max(1.0, session_remaining))
         with _SESSION_CACHE_LOCK:
-            _SESSION_CACHE[token_hash] = (user, now_ts + ttl)
+            _SESSION_CACHE[token_hash] = (user.id, now_ts + ttl)
 
         # Update last_seen_at periodically without blocking
         if (now - session.last_seen_at).total_seconds() > 300:
@@ -355,15 +358,16 @@ class AuthService:
         return target_user
 
     @staticmethod
-    def change_password(db: Session, user: User, current_password: str, new_password: str) -> None:
+    def change_password(db: Session, user: User, current_password: str, new_password: str) -> User:
         """Allows an authenticated user to securely change their own password.
 
         Verifies current password with Argon2id, persists the new Argon2id hash,
         revokes prior active sessions for zero-trust hygiene, and commits to PostgreSQL.
+        Returns the refreshed, attached User model instance.
         """
         from fastapi import HTTPException, status
 
-        logger.info("Admin password update requested for user_id=%s (%s)", user.id, user.username)
+        logger.info("Admin password update requested for user_id=%s (%s)", getattr(user, "id", None), getattr(user, "username", None))
 
         if not current_password:
             raise HTTPException(
@@ -371,8 +375,14 @@ class AuthService:
                 detail="Current password is required.",
             )
 
-        if not verify_password(current_password, user.password_hash):
-            logger.warning("Admin password change rejected: incorrect current password for user_id=%s", user.id)
+        # Defensive lookup: ensure user is attached to current database session
+        user_id = getattr(user, "id", None)
+        target_user = db.get(User, user_id) if user_id else None
+        if not target_user:
+            target_user = user
+
+        if not verify_password(current_password, target_user.password_hash):
+            logger.warning("Admin password change rejected: incorrect current password for user_id=%s", target_user.id)
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Incorrect current password.",
@@ -385,13 +395,15 @@ class AuthService:
             )
 
         # Hash with Argon2id
-        user.password_hash = hash_password(new_password)
+        target_user.password_hash = hash_password(new_password)
 
         # Invalidate active sessions to prevent stale session persistence
-        revoked_count = AuthService.revoke_all_user_sessions(db, user.id)
+        revoked_count = AuthService.revoke_all_user_sessions(db, target_user.id)
 
         # Commit and refresh
         db.commit()
-        db.refresh(user)
+        db.refresh(target_user)
 
-        logger.info("Admin password update committed successfully for user_id=%s (%s), revoked %d active session(s)", user.id, user.username, revoked_count)
+        logger.info("Admin password update committed successfully for user_id=%s (%s), revoked %d active session(s)", target_user.id, target_user.username, revoked_count)
+        return target_user
+

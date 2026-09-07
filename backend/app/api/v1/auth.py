@@ -182,7 +182,7 @@ def change_password(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    AuthService.change_password(
+    updated_user = AuthService.change_password(
         db=db,
         user=current_user,
         current_password=payload.current_password,
@@ -194,7 +194,7 @@ def change_password(
     user_agent = request.headers.get("user-agent")
     raw_token, _ = AuthService.create_session(
         db=db,
-        user=current_user,
+        user=updated_user,
         ip_address=client_ip,
         user_agent=user_agent,
     )
@@ -213,12 +213,12 @@ def change_password(
         event_type="PASSWORD_CHANGE",
         category="SECURITY",
         severity="INFO",
-        actor=current_user.username,
+        actor=updated_user.username,
         actor_type="USER",
         action="CHANGE_PASSWORD",
         resource_type="USER",
-        resource_id=str(current_user.id),
-        description=f"User '{current_user.username}' changed their password",
+        resource_id=str(updated_user.id),
+        description=f"User '{updated_user.username}' changed their password",
         ip_address=client_ip,
     )
     return MessageResponse(message="Password changed successfully.")
