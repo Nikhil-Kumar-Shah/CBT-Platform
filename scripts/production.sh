@@ -42,14 +42,25 @@ error() {
 }
 
 # 2. Virtual Environment & Python Detection
-PYTHON_CMD="python3"
-if [ -f "$APP_DIR/.venv/bin/python3" ]; then
-    PYTHON_CMD="$APP_DIR/.venv/bin/python3"
-elif [ -f "$APP_DIR/.venv/bin/python" ]; then
-    PYTHON_CMD="$APP_DIR/.venv/bin/python"
-elif [ -f "$APP_DIR/.venv/Scripts/python.exe" ]; then
-    PYTHON_CMD="$APP_DIR/.venv/Scripts/python.exe"
-fi
+find_python_interpreter() {
+    PYTHON_CMD=""
+    if [ -f "$APP_DIR/.venv/bin/python3" ]; then
+        PYTHON_CMD="$APP_DIR/.venv/bin/python3"
+    elif [ -f "$APP_DIR/.venv/bin/python" ]; then
+        PYTHON_CMD="$APP_DIR/.venv/bin/python"
+    elif [ -f "$APP_DIR/venv/bin/python3" ]; then
+        PYTHON_CMD="$APP_DIR/venv/bin/python3"
+    elif [ -f "$APP_DIR/venv/bin/python" ]; then
+        PYTHON_CMD="$APP_DIR/venv/bin/python"
+    elif [ -f "$APP_DIR/.venv/Scripts/python.exe" ]; then
+        PYTHON_CMD="$APP_DIR/.venv/Scripts/python.exe"
+    elif command -v python3 >/dev/null 2>&1; then
+        if python3 -c "import pydantic, fastapi, sqlalchemy" >/dev/null 2>&1; then
+            PYTHON_CMD="python3"
+        fi
+    fi
+}
+find_python_interpreter
 
 verify_prerequisites() {
     if [ ! -f "$ENV_FILE" ]; then
@@ -67,9 +78,31 @@ verify_prerequisites() {
     source "$ENV_FILE"
     set +a
 
-    if ! command -v "$PYTHON_CMD" >/dev/null 2>&1; then
-        error "Python interpreter not found at $PYTHON_CMD. Virtual environment at $APP_DIR/.venv is required."
-        return 1
+    find_python_interpreter
+
+    # Auto-provision or repair virtual environment if missing or incomplete
+    if [ -z "$PYTHON_CMD" ] || ! "$PYTHON_CMD" -c "import pydantic, fastapi, sqlalchemy" >/dev/null 2>&1; then
+        log "Python virtual environment (.venv) is missing or incomplete. Initializing..."
+        if [ ! -d "$APP_DIR/.venv" ]; then
+            if ! python3 -m venv "$APP_DIR/.venv"; then
+                error "Failed to create Python virtual environment at $APP_DIR/.venv."
+                error "Please run: sudo apt install -y python3-venv python3-pip"
+                return 1
+            fi
+        fi
+
+        PYTHON_CMD="$APP_DIR/.venv/bin/python3"
+        if [ ! -f "$PYTHON_CMD" ] && [ -f "$APP_DIR/.venv/bin/python" ]; then
+            PYTHON_CMD="$APP_DIR/.venv/bin/python"
+        fi
+
+        log "Installing / upgrading dependencies from requirements.txt into .venv..."
+        "$PYTHON_CMD" -m pip install --upgrade pip
+        if ! "$PYTHON_CMD" -m pip install -r "$APP_DIR/requirements.txt"; then
+            error "Failed to install dependencies from $APP_DIR/requirements.txt."
+            return 1
+        fi
+        log "✓ Dependencies installed successfully into virtual environment."
     fi
 
     return 0

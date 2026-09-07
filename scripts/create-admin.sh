@@ -30,16 +30,22 @@ source "$ENV_FILE"
 set +a
 
 # 2. Virtual Environment Detection
-PYTHON_CMD="python3"
+PYTHON_CMD=""
 if [ -f "$APP_DIR/.venv/bin/python3" ]; then
     PYTHON_CMD="$APP_DIR/.venv/bin/python3"
 elif [ -f "$APP_DIR/.venv/bin/python" ]; then
     PYTHON_CMD="$APP_DIR/.venv/bin/python"
+elif [ -f "$APP_DIR/venv/bin/python3" ]; then
+    PYTHON_CMD="$APP_DIR/venv/bin/python3"
+elif [ -f "$APP_DIR/venv/bin/python" ]; then
+    PYTHON_CMD="$APP_DIR/venv/bin/python"
 elif [ -f "$APP_DIR/.venv/Scripts/python.exe" ]; then
     PYTHON_CMD="$APP_DIR/.venv/Scripts/python.exe"
+elif command -v python3 >/dev/null 2>&1; then
+    PYTHON_CMD="python3"
 fi
 
-if ! command -v "$PYTHON_CMD" >/dev/null 2>&1; then
+if [ -z "$PYTHON_CMD" ] || ! command -v "$PYTHON_CMD" >/dev/null 2>&1; then
     echo "ERROR: Python runtime not found. Virtualenv at $APP_DIR/.venv is required." >&2
     exit 1
 fi
