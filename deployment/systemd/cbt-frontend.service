@@ -1,0 +1,28 @@
+[Unit]
+Description=CBT Platform Next.js Frontend Service
+After=network.target cbt-backend.service
+Wants=cbt-backend.service
+
+[Service]
+Type=simple
+User=cbt
+Group=cbt
+WorkingDirectory=/opt/cbt/frontend
+Environment="NODE_ENV=production"
+Environment="PORT=3000"
+Environment="HOSTNAME=127.0.0.1"
+ExecStart=/usr/bin/npm run start
+
+Restart=always
+RestartSec=5s
+KillMode=mixed
+TimeoutStopSec=30s
+
+# Security sandboxing
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

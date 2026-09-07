@@ -1,0 +1,81 @@
+version: "3.8"
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: cbt_db
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cbt_prod_db}
+      POSTGRES_USER: ${POSTGRES_USER:-cbt_app_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_in_production}
+    volumes:
+      - cbt_pgdata:/var/lib/postgresql/data
+      - ./backups:/backups
+    # Only expose to private Docker internal bridge network
+    networks:
+      - cbt_internal_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: deployment/docker/Dockerfile.backend
+    container_name: cbt_backend
+    restart: always
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-cbt_app_user}:${POSTGRES_PASSWORD:-change_in_production}@db:5432/${POSTGRES_DB:-cbt_prod_db}
+      SECRET_KEY: ${SECRET_KEY}
+      SESSION_COOKIE_SECURE: "true"
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://cbt.example.com}
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - cbt_media:/app/backend/media
+    networks:
+      - cbt_internal_net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: cbt_frontend
+    restart: always
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: /api/v1
+    depends_on:
+      - backend
+    networks:
+      - cbt_internal_net
+
+  nginx:
+    image: nginx:alpine
+    container_name: cbt_nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deployment/nginx/cbt.conf:/etc/nginx/nginx.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - cbt_media:/var/www/cbt/backend/media:ro
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - cbt_internal_net
+
+volumes:
+  cbt_pgdata:
+  cbt_media:
+
+networks:
+  cbt_internal_net:
+    driver: bridge

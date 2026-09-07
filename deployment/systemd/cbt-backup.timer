@@ -1,0 +1,13 @@
+[Unit]
+Description=Daily Automated PostgreSQL Backup Timer for CBT Platform
+Requires=cbt-backup.service
+
+[Timer]
+# Run every day at 02:00 UTC
+OnCalendar=*-*-* 02:00:00 UTC
+# If the machine was off when the timer was supposed to trigger, run immediately upon boot
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

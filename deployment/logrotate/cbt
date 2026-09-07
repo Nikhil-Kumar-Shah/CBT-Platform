@@ -1,0 +1,28 @@
+# Logrotate configuration for CBT Platform on Linux VM
+# Place in /etc/logrotate.d/cbt
+
+/var/log/cbt/*.log {
+    daily
+    missingok
+    rotate 14
+    compress
+    delaycompress
+    notifempty
+    create 0640 cbt cbt
+    sharedscripts
+    copytruncate
+}
+
+/var/log/nginx/cbt_*.log {
+    daily
+    missingok
+    rotate 14
+    compress
+    delaycompress
+    notifempty
+    create 0640 www-data adm
+    sharedscripts
+    postrotate
+        [ -f /var/run/nginx.pid ] && kill -USR1 $(cat /var/run/nginx.pid)
+    endscript
+}

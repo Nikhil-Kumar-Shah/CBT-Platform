@@ -1,0 +1,17 @@
+# PostgreSQL Client Authentication Configuration File for CBT Platform
+# Place in /etc/postgresql/16/main/pg_hba.conf
+
+# TYPE  DATABASE        USER            ADDRESS                 METHOD
+
+# "local" is for Unix domain socket connections only
+local   all             postgres                                peer
+local   all             all                                     scram-sha-256
+
+# IPv4 local connections: ONLY localhost is allowed, using SCRAM-SHA-256 password auth
+host    all             all             127.0.0.1/32            scram-sha-256
+
+# IPv6 local connections: ONLY localhost is allowed
+host    all             all             ::1/128                 scram-sha-256
+
+# REJECT ALL external network traffic explicitly
+# (No entries for 0.0.0.0/0 or external subnets)

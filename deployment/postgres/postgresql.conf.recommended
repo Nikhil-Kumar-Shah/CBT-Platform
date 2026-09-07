@@ -1,0 +1,53 @@
+# PostgreSQL 16/18 Production Configuration for CBT Platform
+# Place or include in /etc/postgresql/16/main/postgresql.conf or equivalent
+
+# ------------------------------------------------------------------------------
+# CONNECTIONS AND NETWORKING (CRITICAL SECURITY)
+# ------------------------------------------------------------------------------
+# Only bind to localhost. Under NO circumstances should PostgreSQL listen on 0.0.0.0
+listen_addresses = '127.0.0.1'
+port = 5432
+max_connections = 100
+superuser_reserved_connections = 3
+
+# ------------------------------------------------------------------------------
+# MEMORY TUNING (Based on typical 2GB-8GB Linux VM for ~500 concurrent students)
+# ------------------------------------------------------------------------------
+shared_buffers = 256MB
+work_mem = 4MB
+maintenance_work_mem = 64MB
+effective_cache_size = 768MB
+wal_buffers = 16MB
+
+# ------------------------------------------------------------------------------
+# WRITE AHEAD LOG (WAL) & RELIABILITY
+# ------------------------------------------------------------------------------
+wal_level = replica
+synchronous_commit = on
+checkpoint_timeout = 10min
+checkpoint_completion_target = 0.9
+max_wal_size = 1GB
+min_wal_size = 80MB
+
+# ------------------------------------------------------------------------------
+# LOGGING & SLOW QUERY AUDITING
+# ------------------------------------------------------------------------------
+logging_collector = on
+log_directory = 'log'
+log_filename = 'postgresql-%Y-%m-%d_%H%M%S.log'
+log_rotation_age = 1d
+log_rotation_size = 50MB
+log_min_messages = warning
+log_min_error_statement = error
+log_min_duration_statement = 1000  # Log any query taking longer than 1000ms (1 sec)
+log_line_prefix = '%m [%p] %q%u@%d '
+log_timezone = 'UTC'
+
+# ------------------------------------------------------------------------------
+# CLIENT CONNECTION DEFAULTS
+# ------------------------------------------------------------------------------
+timezone = 'UTC'
+client_encoding = 'utf8'
+default_transaction_isolation = 'read committed'
+statement_timeout = 60000          # Abort any statement taking > 60 seconds
+idle_in_transaction_session_timeout = 30000 # Abort idle transactions > 30 seconds
