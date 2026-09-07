@@ -103,6 +103,15 @@ def backup_database():
         )
         if res.returncode != 0:
             print(f"ERROR: pg_dump failed with code {res.returncode}:\n{res.stderr}", file=sys.stderr)
+            if "server version mismatch" in res.stderr.lower():
+                print(
+                    "\nTIP: The remote PostgreSQL server version is newer than your local pg_dump client.\n"
+                    "To upgrade pg_dump on Ubuntu:\n"
+                    "    sudo apt install -y postgresql-client-18\n"
+                    "Or bypass pre-deployment backup:\n"
+                    "    ./scripts/production.sh deploy --skip-backup\n",
+                    file=sys.stderr,
+                )
             return False
 
         if not target_file.exists() or target_file.stat().st_size == 0:

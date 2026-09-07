@@ -318,20 +318,41 @@ cmd_monitor() {
 
 # 11. Deployment Pipeline
 cmd_deploy() {
+    local skip_backup=false
+    for arg in "$@"; do
+        if [ "$arg" = "--skip-backup" ] || [ "$arg" = "-n" ]; then
+            skip_backup=true
+        fi
+    done
+    if [ "${FORCE_DEPLOY:-0}" = "1" ] || [ "${SKIP_BACKUP:-0}" = "1" ]; then
+        skip_backup=true
+    fi
+
     log "=========================================================="
     log "Starting Atomic Production Deployment Pipeline"
     log "=========================================================="
     verify_prerequisites || exit 1
 
     # Step 1: Pre-deployment health check
+    local is_initial=false
     log "Step 1/6: Verifying pre-deployment health..."
-    cmd_health || log "Notice: System currently offline (Initial deployment)."
+    if ! cmd_health 2>/dev/null; then
+        is_initial=true
+        log "Notice: System currently offline (Initial deployment)."
+    fi
 
     # Step 2: Backup before ANY modifications
-    log "Step 2/6: Creating mandatory pre-deployment database backup..."
-    if ! cmd_backup; then
-        error "DEPLOYMENT ABORTED: Database backup failed! No changes were made."
-        exit 1
+    log "Step 2/6: Creating pre-deployment database backup..."
+    if [ "$skip_backup" = "true" ]; then
+        log "Notice: Pre-deployment database backup skipped via flag."
+    elif ! cmd_backup; then
+        if [ "$is_initial" = "true" ]; then
+            log "Warning: Pre-deployment database backup skipped on initial deployment."
+            log "Proceeding with deployment and database auto-bootstrap..."
+        else
+            error "DEPLOYMENT ABORTED: Database backup failed! Use './scripts/production.sh deploy --skip-backup' or resolve pg_dump version."
+            exit 1
+        fi
     fi
 
     # Step 3: Dependencies update
@@ -400,7 +421,7 @@ case "$ACTION" in
         cmd_monitor
         ;;
     deploy|update)
-        cmd_deploy
+        cmd_deploy "$@"
         ;;
     *)
         echo "Usage: $0 {start|stop|restart|status|health|logs|deploy|backup|restore-test|monitor}"
