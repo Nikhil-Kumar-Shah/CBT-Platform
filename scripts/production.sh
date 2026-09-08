@@ -138,10 +138,35 @@ find_python_interpreter() {
 find_python_interpreter
 
 verify_prerequisites() {
+    # 1. Auto-create runtime directories
+    mkdir -p "$APP_DIR/logs" "$APP_DIR/backups" "$APP_DIR/frontend/.next"
+    fix_permissions
+
+    # 2. Check and auto-provision systemd units & sudoers if missing
+    if command -v systemctl >/dev/null 2>&1 && [ ! -f "/etc/systemd/system/cbt-backend.service" ]; then
+        if [ -f "$APP_DIR/scripts/setup-production-user.sh" ]; then
+            log_warn "Systemd service units are not yet installed in /etc/systemd/system/."
+            if [ "$EUID" -eq 0 ]; then
+                log_info "Installing systemd units and sudoers configuration as root..."
+                "$APP_DIR/scripts/setup-production-user.sh" "$DEPLOY_USER" || true
+            elif command -v sudo >/dev/null 2>&1; then
+                log_info "Prompting sudo to install systemd units and sudoers configuration..."
+                sudo "$APP_DIR/scripts/setup-production-user.sh" "$DEPLOY_USER" || true
+            fi
+        fi
+    fi
+
+    # 3. Check and auto-provision .env from template if missing
     if [ ! -f "$ENV_FILE" ]; then
-        log_error "Production configuration file not found at: $ENV_FILE"
-        log_error "Please create .env with production credentials."
-        return 1
+        if [ -f "$APP_DIR/.env.example" ]; then
+            log_warn "Production configuration file (.env) not found. Auto-generating from .env.example..."
+            cp "$APP_DIR/.env.example" "$ENV_FILE"
+            chmod 600 "$ENV_FILE" 2>/dev/null || true
+            log_warn "Created /opt/cbt/.env with default settings. Please verify database credentials if needed."
+        else
+            log_error "Production configuration file not found at: $ENV_FILE"
+            return 1
+        fi
     fi
 
     # Secure permissions on .env (600: owner read/write only)
@@ -153,31 +178,49 @@ verify_prerequisites() {
     source "$ENV_FILE"
     set +a
 
+    # 4. Auto-provision or repair Python virtual environment (.venv)
     find_python_interpreter
 
-    # Auto-provision or repair virtual environment if missing or incomplete
-    if [ -z "$PYTHON_CMD" ] || ! "$PYTHON_CMD" -c "import pydantic, fastapi, sqlalchemy" >/dev/null 2>&1; then
-        log_warn "Python virtual environment (.venv) is missing or incomplete. Initializing..."
-        if [ ! -d "$APP_DIR/.venv" ]; then
-            if ! python3 -m venv "$APP_DIR/.venv"; then
-                log_error "Failed to create Python virtual environment at $APP_DIR/.venv."
-                log_error "Please run: sudo apt install -y python3-venv python3-pip"
-                return 1
-            fi
+    if [ ! -d "$APP_DIR/.venv" ]; then
+        log_warn "Python virtual environment (.venv) is missing. Auto-creating at $APP_DIR/.venv..."
+        if ! python3 -m venv "$APP_DIR/.venv"; then
+            log_error "Failed to create Python virtual environment at $APP_DIR/.venv."
+            log_error "Please run: sudo apt install -y python3-venv python3-pip"
+            return 1
         fi
+        find_python_interpreter
+    fi
 
-        PYTHON_CMD="$APP_DIR/.venv/bin/python3"
-        if [ ! -f "$PYTHON_CMD" ] && [ -f "$APP_DIR/.venv/bin/python" ]; then
-            PYTHON_CMD="$APP_DIR/.venv/bin/python"
-        fi
-
-        log_info "Installing core requirements into virtual environment..."
+    # 5. Check and auto-install Python requirements
+    if [ -z "$PYTHON_CMD" ] || ! "$PYTHON_CMD" -c "import pydantic, fastapi, sqlalchemy, alembic, psycopg" >/dev/null 2>&1; then
+        log_info "Installing / updating Python requirements into virtual environment ($PYTHON_CMD)..."
         "$PYTHON_CMD" -m pip install --quiet --upgrade pip
         if ! "$PYTHON_CMD" -m pip install -r "$APP_DIR/requirements.txt"; then
             log_error "Failed to install dependencies from $APP_DIR/requirements.txt."
             return 1
         fi
-        log_success "Virtual environment initialized successfully."
+        log_success "Virtual environment initialized successfully with all Python dependencies."
+    fi
+
+    # 6. Check and auto-install Frontend dependencies & production build
+    if [ -d "$APP_DIR/frontend" ] && command -v npm >/dev/null 2>&1; then
+        if [ ! -d "$APP_DIR/frontend/node_modules" ]; then
+            log_warn "Frontend node_modules missing. Auto-installing dependencies via npm..."
+            (cd "$APP_DIR/frontend" && npm install) || {
+                log_error "Failed to install frontend dependencies via npm."
+                return 1
+            }
+            log_success "Frontend node_modules installed successfully."
+        fi
+
+        if [ ! -d "$APP_DIR/frontend/.next" ] || [ ! -f "$APP_DIR/frontend/.next/BUILD_ID" ]; then
+            log_warn "Frontend production build (.next) missing. Compiling Next.js bundle..."
+            (cd "$APP_DIR/frontend" && npm run build) || {
+                log_error "Failed to compile Next.js production bundle."
+                return 1
+            }
+            log_success "Next.js production bundle compiled successfully."
+        fi
     fi
 
     return 0
@@ -492,6 +535,11 @@ cmd_start() {
         $SUDO_CMD systemctl start cbt-frontend 2>/dev/null || true
         
         if command -v nginx >/dev/null 2>&1; then
+            if [ ! -f "/etc/nginx/sites-enabled/cbt" ] && [ -f "$APP_DIR/deployment/nginx/cbt.conf" ]; then
+                $SUDO_CMD cp "$APP_DIR/deployment/nginx/cbt.conf" /etc/nginx/sites-available/cbt 2>/dev/null || true
+                $SUDO_CMD ln -sf /etc/nginx/sites-available/cbt /etc/nginx/sites-enabled/ 2>/dev/null || true
+                $SUDO_CMD rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+            fi
             if $SUDO_CMD nginx -t 2>/dev/null; then
                 $SUDO_CMD systemctl start nginx || $SUDO_CMD systemctl reload nginx || true
                 log_success "NGINX reverse proxy active."
@@ -552,8 +600,15 @@ cmd_restart() {
         $SUDO_CMD systemctl start cbt-backend
         $SUDO_CMD systemctl start cbt-frontend 2>/dev/null || true
 
-        if command -v nginx >/dev/null 2>&1 && $SUDO_CMD nginx -t 2>/dev/null; then
-            $SUDO_CMD systemctl reload nginx 2>/dev/null || $SUDO_CMD systemctl restart nginx 2>/dev/null || true
+        if command -v nginx >/dev/null 2>&1; then
+            if [ ! -f "/etc/nginx/sites-enabled/cbt" ] && [ -f "$APP_DIR/deployment/nginx/cbt.conf" ]; then
+                $SUDO_CMD cp "$APP_DIR/deployment/nginx/cbt.conf" /etc/nginx/sites-available/cbt 2>/dev/null || true
+                $SUDO_CMD ln -sf /etc/nginx/sites-available/cbt /etc/nginx/sites-enabled/ 2>/dev/null || true
+                $SUDO_CMD rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+            fi
+            if $SUDO_CMD nginx -t 2>/dev/null; then
+                $SUDO_CMD systemctl reload nginx 2>/dev/null || $SUDO_CMD systemctl restart nginx 2>/dev/null || true
+            fi
         fi
     else
         export PYTHONPATH="$APP_DIR"
