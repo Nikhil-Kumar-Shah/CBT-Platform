@@ -148,6 +148,10 @@ def test_dashboard_expired_test_auto_reconciliation(client: TestClient, db_sessi
     db.commit()
 
     # Calling dashboard stats must reconcile past_test to COMPLETED
+    import backend.app.services.dashboard_service as ds
+    ds._LAST_DASHBOARD_RECONCILE_AT = 0.0
+    DashboardService.invalidate_cache()
+
     stats = DashboardService.get_stats(db)
     reconciled_test = db.get(Test, past_test.id)
     assert reconciled_test.status == "COMPLETED"
