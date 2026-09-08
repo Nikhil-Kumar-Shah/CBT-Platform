@@ -41,6 +41,7 @@ from backend.app.schemas.test_audit import TestAuditLogResponse
 from backend.app.schemas.question import QuestionResponse, QuestionCreate, QuestionUpdate
 from backend.app.services.question import QuestionService
 from backend.app.services.audit_service import AuditService
+from backend.app.core.logging import logger
 
 _LAST_TEST_RECONCILE_AT: float = 0.0
 
@@ -881,6 +882,40 @@ class TestService:
         db.commit()
         db.expire_all()
         return TestService.get_test(db, test_id)
+
+    @staticmethod
+    def delete_test_permanently(db: Session, test_id: uuid.UUID, user_id: uuid.UUID) -> None:
+        """Permanently and irreversibly delete a test paper and all its data.
+
+        Only tests in DRAFT, ARCHIVED, or CANCELLED status may be deleted.
+        LIVE, PAUSED, SCHEDULED, and COMPLETED tests are protected — end or cancel them first.
+
+        All child records (test_questions, test_attempts, test_attempt_answers,
+        attempt_integrity_events, test_audit_logs) cascade automatically via DB-level ON DELETE CASCADE.
+        """
+        test = TestService.get_test(db, test_id)
+
+        DELETABLE_STATUSES = {"DRAFT", "ARCHIVED", "CANCELLED"}
+        if test.status not in DELETABLE_STATUSES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Cannot delete a test in '{test.status}' status. "
+                    f"Only DRAFT, ARCHIVED, or CANCELLED tests may be permanently deleted. "
+                    f"End or cancel the test first."
+                ),
+            )
+
+        title = test.title or str(test_id)
+
+        # All child tables have ON DELETE CASCADE — a single delete cascades everything
+        db.delete(test)
+        db.commit()
+
+        logger.info(
+            "Test paper '%s' (id=%s) permanently deleted by user %s.", title, test_id, user_id
+        )
+
 
     @staticmethod
     def complete_test(db: Session, test_id: uuid.UUID, user_id: uuid.UUID) -> Test:

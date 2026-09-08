@@ -35,8 +35,145 @@ async def lifespan(app: FastAPI):
         logger.info("PostgreSQL database connection verified successfully.")
     except Exception as exc:
         logger.warning("Database connectivity check failed on startup (%s). Ensure PostgreSQL is running and accessible.", exc)
+
+    # Start background task: auto-submit expired IN_PROGRESS attempts every 2 minutes
+    import asyncio
+
+    async def _sweep_expired_attempts():
+        """Periodically find and auto-submit any IN_PROGRESS attempt whose expires_at has passed.
+
+        This is the server-authoritative counterpart to client-side expiry checks.
+        It ensures that if a candidate's browser crashes, closes, or hits a server error,
+        their attempt is still properly evaluated and submitted after the duration elapses.
+        """
+        # Skip sweeper in test mode to avoid interfering with unit tests
+        if settings.TESTING:
+            return
+
+        # Give the app a moment to fully start before first sweep
+        await asyncio.sleep(30)
+
+        while True:
+            try:
+                from datetime import datetime, timezone
+                from sqlalchemy import select
+                from sqlalchemy.orm import selectinload
+                from backend.app.core.database import SessionLocal
+                from backend.app.models.test_attempt import TestAttempt
+                from backend.app.models.test import Test
+                from backend.app.models.test_question import TestQuestion
+                from backend.app.models.question import Question
+                from backend.app.services.attempt_service import AttemptService
+                from backend.app.services.audit_service import AuditService
+
+                now = datetime.now(timezone.utc)
+
+                with SessionLocal() as db:
+                    # Find all IN_PROGRESS attempts whose time has expired
+                    expired_attempts = db.scalars(
+                        select(TestAttempt)
+                        .options(
+                            selectinload(TestAttempt.answers),
+                            selectinload(TestAttempt.test)
+                            .selectinload(Test.test_questions)
+                            .selectinload(TestQuestion.question)
+                            .selectinload(Question.options),
+                            selectinload(TestAttempt.test),
+                        )
+                        .where(
+                            TestAttempt.status == "IN_PROGRESS",
+                            TestAttempt.expires_at < now,
+                        )
+                    ).all()
+
+                    if expired_attempts:
+                        logger.info(
+                            "[Sweeper] Found %d expired IN_PROGRESS attempt(s) — auto-submitting.",
+                            len(expired_attempts),
+                        )
+
+                    for attempt in expired_attempts:
+                        try:
+                            test = attempt.test
+                            if not test:
+                                continue
+
+                            elapsed_minutes = int(
+                                (now - (attempt.started_at.replace(tzinfo=timezone.utc)
+                                        if attempt.started_at.tzinfo is None
+                                        else attempt.started_at)).total_seconds() / 60
+                            )
+
+                            logger.warning(
+                                "[Sweeper] Auto-submitting expired attempt id=%s candidate='%s' "
+                                "test='%s' (started %d min ago, expires_at=%s)",
+                                attempt.id,
+                                attempt.student_name,
+                                test.title,
+                                elapsed_minutes,
+                                attempt.expires_at,
+                            )
+
+                            AttemptService._evaluate_and_complete_attempt(
+                                db=db,
+                                attempt=attempt,
+                                test=test,
+                                is_expired=True,
+                                submission_reason="AUTO_EXPIRED",
+                            )
+
+                            # Log a clear audit event so the admin can see the sweep happened
+                            try:
+                                AuditService.log(
+                                    db=db,
+                                    event_type="EXAM_SWEEP_AUTO_SUBMITTED",
+                                    category="EXAM",
+                                    severity="INFO",
+                                    actor=attempt.student_name or "Candidate",
+                                    actor_type="SYSTEM",
+                                    action="AUTO_SUBMIT",
+                                    resource_type="ATTEMPT",
+                                    resource_id=str(attempt.id),
+                                    description=(
+                                        f"[Server Sweeper] Attempt auto-submitted after {elapsed_minutes} min "
+                                        f"(expires_at exceeded). Candidate: '{attempt.student_name}', "
+                                        f"Test: '{test.title}'."
+                                    ),
+                                    session_id=attempt.session_id,
+                                    details={
+                                        "elapsed_minutes": elapsed_minutes,
+                                        "expires_at": str(attempt.expires_at),
+                                        "sweep_triggered_at": str(now),
+                                    },
+                                )
+                            except Exception:
+                                pass
+
+                        except Exception as sweep_exc:
+                            logger.error(
+                                "[Sweeper] Failed to auto-submit attempt id=%s: %s",
+                                attempt.id,
+                                sweep_exc,
+                            )
+
+            except Exception as outer_exc:
+                logger.error("[Sweeper] Sweep cycle error: %s", outer_exc)
+
+            # Wait 2 minutes before the next sweep
+            await asyncio.sleep(120)
+
+    sweep_task = asyncio.ensure_future(_sweep_expired_attempts())
+    logger.info("[Sweeper] Expired-attempt sweeper background task started (interval: 120s).")
+
     yield
+
+    sweep_task.cancel()
+    try:
+        await sweep_task
+    except asyncio.CancelledError:
+        pass
     logger.info("Shutting down %s", settings.APP_NAME)
+
 
 
 app = FastAPI(

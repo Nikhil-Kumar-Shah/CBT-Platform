@@ -27,6 +27,8 @@ from backend.app.schemas.integrity import (
 )
 from backend.app.services.attempt_service import AttemptService
 from backend.app.services.integrity_service import IntegrityService
+from backend.app.services.audit_service import AuditService
+from backend.app.core.logging import logger
 
 router = APIRouter(prefix="/attempts", tags=["Attempts"])
 
@@ -134,12 +136,42 @@ def get_attempt_state(
     """Fetch authoritative state for an exam attempt."""
     effective_session = session_id or x_session_id
     is_admin = bool(optional_admin and optional_admin.is_admin())
-    return AttemptService.get_attempt_state(
-        db=db,
-        attempt_id=attempt_id,
-        session_id=effective_session,
-        is_admin=is_admin,
-    )
+    try:
+        return AttemptService.get_attempt_state(
+            db=db,
+            attempt_id=attempt_id,
+            session_id=effective_session,
+            is_admin=is_admin,
+        )
+    except HTTPException:
+        # Known HTTP exceptions (403 session mismatch, 404 not found, etc.) — pass through as-is
+        raise
+    except Exception as exc:
+        # Unexpected error (e.g. AttributeError, DB issue) — audit-log then re-raise for global handler
+        logger.exception(
+            "Unhandled error in get_attempt_state for attempt_id=%s: %s", attempt_id, exc
+        )
+        try:
+            AuditService.log(
+                db=db,
+                event_type="ATTEMPT_LOAD_FAILED",
+                category="SECURITY",
+                severity="CRITICAL",
+                actor="SYSTEM",
+                actor_type="SYSTEM",
+                action="LOAD_STATE",
+                resource_type="ATTEMPT",
+                resource_id=str(attempt_id),
+                description=(
+                    f"Internal server error while loading exam session for attempt {attempt_id}. "
+                    f"Candidate may have been unable to continue the exam. Error: {type(exc).__name__}: {exc}"
+                ),
+                session_id=effective_session,
+                details={"error_type": type(exc).__name__, "error": str(exc)},
+            )
+        except Exception:
+            pass
+        raise
 
 
 @router.post(

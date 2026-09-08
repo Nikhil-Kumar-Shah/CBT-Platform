@@ -1669,10 +1669,10 @@ function ResultsAnalyticsContent() {
                           ? "rgba(148, 163, 184, 0.2)"
                           : "rgba(239, 68, 68, 0.3)",
                         background: isCorrect
-                          ? "rgba(16, 185, 129, 0.04)"
+                          ? "rgba(16, 185, 129, 0.06)"
                           : isUnattempted
-                          ? "rgba(255, 255, 255, 0.02)"
-                          : "rgba(239, 68, 68, 0.04)",
+                          ? "var(--bg-surface)"
+                          : "rgba(239, 68, 68, 0.06)",
                       }}
                     >
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.6rem" }}>
@@ -1711,10 +1711,10 @@ function ResultsAnalyticsContent() {
                           gridTemplateColumns: "1fr 1fr",
                           gap: "0.75rem",
                           fontSize: "0.85rem",
-                          background: "rgba(0, 0, 0, 0.3)",
+                          background: "var(--bg-surface-elevated)",
                           padding: "0.75rem 0.95rem",
                           borderRadius: "6px",
-                          border: "1px solid rgba(255, 255, 255, 0.04)",
+                          border: "1px solid var(--border-color)",
                         }}
                       >
                         <div>
@@ -1742,11 +1742,11 @@ function ResultsAnalyticsContent() {
                             fontSize: "0.82rem",
                             color: "var(--text-muted)",
                             marginTop: "0.75rem",
-                            borderTop: "1px solid rgba(255, 255, 255, 0.05)",
+                            borderTop: "1px solid var(--border-color)",
                             paddingTop: "0.5rem",
                           }}
                         >
-                          <strong style={{ color: "#cbd5e1" }}>Solution / Explanation:</strong>{" "}
+                          <strong style={{ color: "var(--text-main)" }}>Solution / Explanation:</strong>{" "}
                           <MathRenderer text={ans.explanation} />
                         </div>
                       )}

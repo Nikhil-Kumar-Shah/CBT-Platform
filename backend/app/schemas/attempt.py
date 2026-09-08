@@ -196,6 +196,16 @@ class AttemptSubmitRequest(BaseModel):
     final_answers: Optional[List[AttemptSaveAnswerRequest]] = None
 
 
+class AttemptOptionResultItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    option_order: int
+    content: str
+    is_correct: Optional[bool] = None
+    is_selected: bool = False
+
+
 class AttemptQuestionResultItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -203,6 +213,7 @@ class AttemptQuestionResultItem(BaseModel):
     order_index: int
     question_content: str
     question_type: str
+    options: List[AttemptOptionResultItem] = []
     candidate_answer: Optional[str] = None
     correct_answer: Optional[str] = None
     is_correct: Optional[bool] = None

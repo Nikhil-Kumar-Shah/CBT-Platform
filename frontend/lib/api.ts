@@ -436,11 +436,20 @@ export interface AttemptSubmitRequest {
   forced_by_expiry?: boolean;
 }
 
+export interface AttemptOptionResultItem {
+  id: string;
+  option_order: number;
+  content: string;
+  is_correct?: boolean | null;
+  is_selected: boolean;
+}
+
 export interface AttemptResultItem {
   question_id: string;
   order_index: number;
   question_content: string;
   question_type: string;
+  options?: AttemptOptionResultItem[];
   candidate_answer: string;
   correct_answer?: string | null;
   is_correct?: boolean | null;
@@ -998,6 +1007,11 @@ export const api = {
 
   archiveTest: (id: string) =>
     request<Test>(`/tests/${id}`, {
+      method: "DELETE",
+    }),
+
+  deleteTestPermanently: (id: string) =>
+    request<void>(`/tests/${id}/permanent`, {
       method: "DELETE",
     }),
 

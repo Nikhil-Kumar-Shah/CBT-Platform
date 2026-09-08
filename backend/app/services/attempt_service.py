@@ -35,6 +35,7 @@ from backend.app.schemas.attempt import (
     AttemptSubmitRequest,
     AttemptResultResponse,
     AttemptQuestionResultItem,
+    AttemptOptionResultItem,
 )
 
 
@@ -1166,6 +1167,7 @@ class AttemptService:
                 # Format candidate answer string
                 candidate_ans_str = ""
                 is_attempted = False
+                selected_ids_set = set()
                 if ans:
                     if q.question_type == "MULTIPLE_CHOICE":
                         selected_tokens = []
@@ -1176,12 +1178,15 @@ class AttemptService:
                                 selected_tokens = [x.strip() for x in ans.selected_option_ids.split(",") if x.strip()]
                             else:
                                 selected_tokens = [ans.selected_option_ids.strip()]
+                        selected_ids_set = set(selected_tokens)
                         opt_map = {str(o.id): o.content for o in q.options}
                         contents = [opt_map.get(tok, tok) for tok in selected_tokens]
                         candidate_ans_str = ", ".join(contents)
                         is_attempted = bool(selected_tokens)
                     elif q.question_type in ("MCQ", "TRUE_FALSE", "ASSERTION_REASON", "MATCH_THE_FOLLOWING"):
                         opt_id = (ans.selected_option_ids or ans.text_answer or "").strip()
+                        if opt_id:
+                            selected_ids_set = {opt_id}
                         opt = next((o for o in q.options if str(o.id) == opt_id), None)
                         candidate_ans_str = opt.content if opt else opt_id
                         is_attempted = bool(candidate_ans_str)
@@ -1215,6 +1220,20 @@ class AttemptService:
                             correct_opts = [str(q.numerical_answer)]
                         correct_ans_str = ", ".join(correct_opts) if correct_opts else None
 
+                # Build structured options list
+                result_options = []
+                if q.options:
+                    for opt in sorted(q.options, key=lambda o: o.option_order):
+                        result_options.append(
+                            AttemptOptionResultItem(
+                                id=opt.id,
+                                option_order=opt.option_order,
+                                content=opt.content,
+                                is_correct=opt.is_correct if show_answers else None,
+                                is_selected=str(opt.id) in selected_ids_set,
+                            )
+                        )
+
                 # Explanation strictly based on show_explanation
                 explanation_str = q.explanation if (show_explanation and q.explanation) else None
 
@@ -1224,6 +1243,7 @@ class AttemptService:
                         order_index=idx + 1,
                         question_content=q.content,
                         question_type=q.question_type,
+                        options=result_options,
                         candidate_answer=candidate_ans_str if is_attempted else "",
                         correct_answer=correct_ans_str,
                         is_correct=ans.is_correct if (ans and is_attempted) else None,
@@ -1318,7 +1338,8 @@ class AttemptService:
             if q.media:
                 sorted_media = sorted(q.media, key=lambda m: m.display_order)
                 if sorted_media:
-                    image_url = sorted_media[0].file_path
+                    # QuestionMedia has no .file_path; build the serving URL from storage_key
+                    image_url = f"/media/{sorted_media[0].storage_key}"
 
             # Order options according to stored option_orders_map
             ordered_options: List[AttemptQuestionOptionItem] = []

@@ -493,15 +493,138 @@ export default function StudentResultPage() {
                   <MathRenderer content={ans.question_content} />
                 </div>
 
-                {ans.candidate_answer && (
-                  <div style={{ fontSize: "0.85rem", color: "var(--text-muted)", marginBottom: "0.4rem" }}>
-                    <strong style={{ color: "var(--text-main)" }}>Your Answer:</strong> {ans.candidate_answer}
-                  </div>
-                )}
+                {/* STRUCTURED OPTIONS DISPLAY */}
+                {ans.options && ans.options.length > 0 ? (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", marginBottom: "1rem" }}>
+                    {ans.options.map((opt) => {
+                      const isSelected = opt.is_selected;
+                      const isCorrect = opt.is_correct === true;
+                      const isIncorrect = opt.is_correct === false;
 
-                {ans.correct_answer && (
-                  <div style={{ fontSize: "0.85rem", color: "#34d399", marginBottom: "0.4rem" }}>
-                    <strong style={{ color: "var(--text-main)" }}>Correct Answer:</strong> {ans.correct_answer}
+                      let borderStyle = "1px solid var(--border-color)";
+                      let bgStyle = "var(--bg-input)";
+                      let statusBadge = null;
+
+                      if (isSelected && isCorrect) {
+                        borderStyle = "1.5px solid #10b981";
+                        bgStyle = "rgba(16, 185, 129, 0.12)";
+                        statusBadge = (
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem", color: "#34d399", fontSize: "0.75rem", fontWeight: 700, flexShrink: 0, padding: "0.2rem 0.55rem", borderRadius: "6px", background: "rgba(16, 185, 129, 0.2)", border: "1px solid rgba(16, 185, 129, 0.4)", whiteSpace: "nowrap" }}>
+                            <CheckCircle2 size={13} /> Your Answer (Correct)
+                          </span>
+                        );
+                      } else if (isSelected && isIncorrect) {
+                        borderStyle = "1.5px solid #ef4444";
+                        bgStyle = "rgba(239, 68, 68, 0.12)";
+                        statusBadge = (
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem", color: "#f87171", fontSize: "0.75rem", fontWeight: 700, flexShrink: 0, padding: "0.2rem 0.55rem", borderRadius: "6px", background: "rgba(239, 68, 68, 0.2)", border: "1px solid rgba(239, 68, 68, 0.4)", whiteSpace: "nowrap" }}>
+                            <XCircle size={13} /> Your Answer (Incorrect)
+                          </span>
+                        );
+                      } else if (isSelected && opt.is_correct === null) {
+                        borderStyle = "1.5px solid var(--primary-500)";
+                        bgStyle = "rgba(124, 58, 237, 0.12)";
+                        statusBadge = (
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem", color: "var(--text-main)", fontSize: "0.75rem", fontWeight: 600, flexShrink: 0, padding: "0.2rem 0.55rem", borderRadius: "6px", background: "rgba(255, 255, 255, 0.1)", border: "1px solid var(--border-color)", whiteSpace: "nowrap" }}>
+                            Your Answer
+                          </span>
+                        );
+                      } else if (!isSelected && isCorrect) {
+                        borderStyle = "1.5px solid rgba(16, 185, 129, 0.6)";
+                        bgStyle = "rgba(16, 185, 129, 0.06)";
+                        statusBadge = (
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem", color: "#34d399", fontSize: "0.75rem", fontWeight: 700, flexShrink: 0, padding: "0.2rem 0.55rem", borderRadius: "6px", background: "rgba(16, 185, 129, 0.15)", border: "1px solid rgba(16, 185, 129, 0.35)", whiteSpace: "nowrap" }}>
+                            <CheckCircle2 size={13} /> Correct Answer
+                          </span>
+                        );
+                      }
+
+                      return (
+                        <div
+                          key={opt.id || opt.option_order}
+                          style={{
+                            display: "flex",
+                            alignItems: "flex-start",
+                            justifyContent: "space-between",
+                            gap: "0.75rem",
+                            padding: "0.75rem 1rem",
+                            borderRadius: "8px",
+                            backgroundColor: bgStyle,
+                            border: borderStyle,
+                            transition: "all 0.2s ease",
+                          }}
+                        >
+                          <div style={{ display: "flex", alignItems: "flex-start", gap: "0.65rem", flex: 1, minWidth: 0 }}>
+                            <span
+                              style={{
+                                fontWeight: 700,
+                                fontSize: "0.9rem",
+                                color: isSelected
+                                  ? (isCorrect ? "#34d399" : "#f87171")
+                                  : isCorrect
+                                  ? "#34d399"
+                                  : "var(--text-muted)",
+                                minWidth: "22px",
+                              }}
+                            >
+                              {String.fromCharCode(64 + opt.option_order)}.
+                            </span>
+                            <div className="cbt-math-container" style={{ flex: 1, fontSize: "0.9rem", color: "var(--text-main)", lineHeight: 1.4 }}>
+                              <MathRenderer content={opt.content} />
+                            </div>
+                          </div>
+                          {statusBadge}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  /* NUMERICAL / TEXT / FALLBACK STRUCTURED DISPLAY */
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: ans.correct_answer ? "1fr 1fr" : "1fr",
+                      gap: "0.75rem",
+                      fontSize: "0.85rem",
+                      background: "var(--bg-surface-elevated)",
+                      padding: "0.85rem 1.1rem",
+                      borderRadius: "8px",
+                      border: "1px solid var(--border-color)",
+                      marginBottom: "0.85rem",
+                    }}
+                  >
+                    <div className="cbt-math-container">
+                      <span style={{ color: "var(--text-muted)", fontSize: "0.75rem", display: "block", marginBottom: "0.25rem", fontWeight: 600 }}>
+                        Your Answer:
+                      </span>
+                      <strong
+                        style={{
+                          color:
+                            ans.is_correct === true
+                              ? "#34d399"
+                              : ans.is_correct === false
+                              ? "#f87171"
+                              : "var(--text-subtle)",
+                        }}
+                      >
+                        {ans.candidate_answer ? (
+                          <MathRenderer inline content={ans.candidate_answer} />
+                        ) : (
+                          <span style={{ fontStyle: "italic", color: "var(--text-subtle)" }}>Unattempted / Left Blank</span>
+                        )}
+                      </strong>
+                    </div>
+
+                    {ans.correct_answer && (
+                      <div className="cbt-math-container">
+                        <span style={{ color: "var(--text-muted)", fontSize: "0.75rem", display: "block", marginBottom: "0.25rem", fontWeight: 600 }}>
+                          Official Correct Answer:
+                        </span>
+                        <strong style={{ color: "#34d399" }}>
+                          <MathRenderer inline content={ans.correct_answer} />
+                        </strong>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -509,14 +632,18 @@ export default function StudentResultPage() {
                   <div
                     className="cbt-math-container"
                     style={{
-                      fontSize: "0.82rem",
+                      fontSize: "0.84rem",
                       color: "var(--text-muted)",
                       marginTop: "0.75rem",
                       paddingTop: "0.75rem",
                       borderTop: "1px solid var(--border-color)",
+                      lineHeight: 1.5,
                     }}
                   >
-                    <strong style={{ color: "var(--text-main)" }}>Explanation:</strong> <MathRenderer content={ans.explanation} />
+                    <strong style={{ color: "var(--text-main)", display: "block", marginBottom: "0.25rem" }}>
+                      Explanation:
+                    </strong>
+                    <MathRenderer content={ans.explanation} />
                   </div>
                 )}
               </div>

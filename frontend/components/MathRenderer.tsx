@@ -2,6 +2,7 @@
 
 import React, { useMemo } from "react";
 import katex from "katex";
+import "katex/dist/katex.min.css";
 import "katex/dist/contrib/mhchem.mjs";
 import { normalizeMathContent } from "@/lib/mathNormalizer";
 
@@ -156,7 +157,7 @@ export const MathRenderer: React.FC<MathRendererProps> = ({
               throwOnError: true,
               strict: false,
               trust: true,
-              output: "htmlAndMathml",
+              output: "html",
             });
           } catch (e: any) {
             if (showErrors) {
@@ -184,7 +185,7 @@ export const MathRenderer: React.FC<MathRendererProps> = ({
               throwOnError: true,
               strict: false,
               trust: true,
-              output: "htmlAndMathml",
+              output: "html",
             });
           } catch (e: any) {
             if (showErrors) {

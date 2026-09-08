@@ -145,6 +145,22 @@ def archive_test(
     return TestService.to_response(test)
 
 
+@router.delete("/{id}/permanent", status_code=status.HTTP_204_NO_CONTENT)
+def delete_test_permanently(
+    id: uuid.UUID,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """Permanently and irreversibly delete a test paper along with all its questions, attempts, and audit logs.
+
+    Only DRAFT, ARCHIVED, or CANCELLED tests may be deleted.
+    LIVE, PAUSED, SCHEDULED, and COMPLETED tests are protected.
+    """
+    TestService.delete_test_permanently(db, id, user_id=admin.id)
+    invalidate_tests_cache(id)
+
+
+
 @router.put("/{id}/questions", response_model=TestResponse)
 def sync_test_questions(
     id: uuid.UUID,

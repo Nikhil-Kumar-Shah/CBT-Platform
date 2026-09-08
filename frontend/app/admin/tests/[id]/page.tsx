@@ -796,6 +796,37 @@ function TestManagementWorkbenchContent() {
     }
   };
 
+  // Permanently delete test paper
+  const handleDeletePaper = () => {
+    const deletableStatuses = ["DRAFT", "ARCHIVED", "CANCELLED"];
+    if (!test || !deletableStatuses.includes(test.status)) {
+      showToast(`Cannot delete a ${test?.status} test. Only DRAFT, ARCHIVED, or CANCELLED tests can be deleted.`, "error");
+      return;
+    }
+    setConfirmModal({
+      isOpen: true,
+      title: "⚠️ Permanently Delete Test Paper",
+      message: `This will PERMANENTLY delete "${test?.title || "this test"}" and ALL associated data — questions, candidate attempts, answers, audit logs, and results. This action CANNOT be undone.\n\nAre you absolutely sure?`,
+      confirmLabel: "Yes, Delete Permanently",
+      variant: "danger",
+      onConfirm: async () => {
+        setSaving(true);
+        try {
+          await api.deleteTestPermanently(testId);
+          setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+          setToast({ message: "Test paper permanently deleted.", type: "success" });
+          // Redirect to tests list after a short delay so toast is visible
+          setTimeout(() => router.push("/admin/tests"), 1200);
+        } catch (e: any) {
+          setToast({ message: e.message || "Failed to delete test paper.", type: "error" });
+          setSaving(false);
+        }
+      },
+    });
+  };
+
+
+
   // Clean options generator per question type
   const getCleanOptionsForType = (type: CBTQuestionType) => {
     if (type === "TRUE_FALSE") {
@@ -2520,6 +2551,24 @@ function TestManagementWorkbenchContent() {
                 <Send size={15} />
                 <span>Publish</span>
               </button>
+
+              <button
+                onClick={handleDeletePaper}
+                disabled={saving}
+                className="btn"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.4rem",
+                  background: "rgba(239, 68, 68, 0.12)",
+                  border: "1px solid rgba(239, 68, 68, 0.4)",
+                  color: "#f87171",
+                }}
+                title="Permanently delete this draft test paper and all its data"
+              >
+                <Trash2 size={15} />
+                <span>Delete Paper</span>
+              </button>
             </>
           )}
 
@@ -2738,6 +2787,24 @@ function TestManagementWorkbenchContent() {
                 <Copy size={15} />
                 <span>Duplicate Paper</span>
               </button>
+
+              <button
+                onClick={handleDeletePaper}
+                disabled={saving}
+                className="btn"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.4rem",
+                  background: "rgba(239, 68, 68, 0.12)",
+                  border: "1px solid rgba(239, 68, 68, 0.4)",
+                  color: "#f87171",
+                }}
+                title="Permanently delete this completed test paper and all its data"
+              >
+                <Trash2 size={15} />
+                <span>Delete Paper</span>
+              </button>
             </>
           )}
 
@@ -2762,6 +2829,24 @@ function TestManagementWorkbenchContent() {
               >
                 <Copy size={15} />
                 <span>Duplicate Paper</span>
+              </button>
+
+              <button
+                onClick={handleDeletePaper}
+                disabled={saving}
+                className="btn"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.4rem",
+                  background: "rgba(239, 68, 68, 0.12)",
+                  border: "1px solid rgba(239, 68, 68, 0.4)",
+                  color: "#f87171",
+                }}
+                title="Permanently delete this cancelled test paper and all its data"
+              >
+                <Trash2 size={15} />
+                <span>Delete Paper</span>
               </button>
             </>
           )}
@@ -2790,6 +2875,24 @@ function TestManagementWorkbenchContent() {
               >
                 <RotateCcw size={15} />
                 <span>Restore Test</span>
+              </button>
+
+              <button
+                onClick={handleDeletePaper}
+                disabled={saving}
+                className="btn"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.4rem",
+                  background: "rgba(239, 68, 68, 0.12)",
+                  border: "1px solid rgba(239, 68, 68, 0.4)",
+                  color: "#f87171",
+                }}
+                title="Permanently delete this archived test paper and all its data"
+              >
+                <Trash2 size={15} />
+                <span>Delete Paper</span>
               </button>
             </>
           )}
