@@ -1,74 +1,8 @@
 # CBT Examination Platform — VM Production Commands Cheatsheet
 
-Point-to-point operations guide for managing the CBT Examination Platform on your Linux Virtual Machine (`/opt/cbt`) as the non-root operator user **`Nikhil-VM`**.
+Point-to-point operations guide for managing the CBT Examination Platform on your Linux Virtual Machine (`/opt/cbt`).
 
 ---
-
-### 0. Fresh VM Clean Setup (From Scratch)
-
-If you deleted the previous code on the Virtual Machine, execute these commands in order:
-
-#### Step A: Install System Packages
-```bash
-sudo apt update && sudo apt install -y python3 python3-venv python3-pip nodejs npm nginx postgresql-client curl git psmisc
-```
-
-#### Step B: Clone Repository into `/opt/cbt` as `Nikhil-VM`
-```bash
-# Create directory and assign ownership to Nikhil-VM
-sudo mkdir -p /opt/cbt
-sudo chown -R Nikhil-VM:Nikhil-VM /opt/cbt
-
-# Clone the repository
-git clone https://github.com/Nikhil-Kumar-Shah/CBT-Platform.git /opt/cbt
-cd /opt/cbt
-```
-
-#### Step C: Configure Production Secrets (`.env`)
-```bash
-cp .env.example .env
-nano .env   # Fill in POSTGRES_HOST, POSTGRES_USER, POSTGRES_PASSWORD, SECRET_KEY
-chmod 600 .env
-```
-
-#### Step D: One-Time System Configuration (Run with `sudo`)
-```bash
-sudo ./scripts/setup-production-user.sh Nikhil-VM
-```
-*(Installs systemd services, `/etc/sudoers.d/cbt`, logs & backups directories, and sets ownership)*
-
-#### Step E: Python Virtual Environment & Dependencies
-```bash
-python3 -m venv .venv
-.venv/bin/pip install --upgrade pip
-.venv/bin/pip install -r requirements.txt
-```
-
-#### Step F: Build Next.js Production Bundle
-```bash
-cd /opt/cbt/frontend
-npm install
-npm run build
-cd /opt/cbt
-```
-
-#### Step G: Configure NGINX Reverse Proxy
-```bash
-sudo cp deployment/nginx/cbt.conf /etc/nginx/sites-available/cbt
-sudo ln -sf /etc/nginx/sites-available/cbt /etc/nginx/sites-enabled/
-sudo rm -f /etc/nginx/sites-enabled/default
-sudo nginx -t
-sudo systemctl reload nginx
-```
-
-#### Step H: Launch Application & Verify (as `Nikhil-VM` without root!)
-```bash
-./production.sh restart
-./production.sh status
-```
-
----
-
 
 ### 1. Interactive Production Controller (Recommended)
 Simply navigate to `/opt/cbt` and execute `./production.sh` with no arguments:
