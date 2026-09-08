@@ -5,8 +5,8 @@ Wants=postgresql.service
 
 [Service]
 Type=simple
-User=cbt
-Group=cbt
+User=Nikhil-VM
+Group=Nikhil-VM
 WorkingDirectory=/opt/cbt
 Environment="PATH=/opt/cbt/.venv/bin:/usr/local/bin:/usr/bin"
 EnvironmentFile=/opt/cbt/.env
@@ -17,11 +17,17 @@ RestartSec=5s
 KillMode=mixed
 TimeoutStopSec=30s
 
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cbt-backend
+
 # Security sandboxing
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ProtectHome=true
+ProtectHome=read-only
+ReadWritePaths=/opt/cbt/logs
 
 [Install]
 WantedBy=multi-user.target
