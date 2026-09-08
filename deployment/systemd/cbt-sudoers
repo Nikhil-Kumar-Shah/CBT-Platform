@@ -7,10 +7,11 @@
 # inspect system journals, and test NGINX configuration without interactive password.
 # ==============================================================================
 
-Nikhil-VM ALL=(ALL) NOPASSWD: /bin/systemctl start cbt-backend, /bin/systemctl stop cbt-backend, /bin/systemctl restart cbt-backend, /bin/systemctl reload cbt-backend, /bin/systemctl status cbt-backend
-Nikhil-VM ALL=(ALL) NOPASSWD: /bin/systemctl start cbt-frontend, /bin/systemctl stop cbt-frontend, /bin/systemctl restart cbt-frontend, /bin/systemctl reload cbt-frontend, /bin/systemctl status cbt-frontend
+Nikhil-VM ALL=(ALL) NOPASSWD: /bin/systemctl start cbt-backend, /bin/systemctl stop cbt-backend, /bin/systemctl restart cbt-backend, /bin/systemctl reload cbt-backend, /bin/systemctl status cbt-backend, /bin/systemctl enable cbt-backend, /bin/systemctl is-active cbt-backend, /bin/systemctl show cbt-backend*
+Nikhil-VM ALL=(ALL) NOPASSWD: /bin/systemctl start cbt-frontend, /bin/systemctl stop cbt-frontend, /bin/systemctl restart cbt-frontend, /bin/systemctl reload cbt-frontend, /bin/systemctl status cbt-frontend, /bin/systemctl enable cbt-frontend, /bin/systemctl is-active cbt-frontend, /bin/systemctl show cbt-frontend*
+Nikhil-VM ALL=(ALL) NOPASSWD: /bin/systemctl start cbt-backup, /bin/systemctl stop cbt-backup, /bin/systemctl restart cbt-backup, /bin/systemctl status cbt-backup, /bin/systemctl enable cbt-backup*
 Nikhil-VM ALL=(ALL) NOPASSWD: /bin/systemctl start nginx, /bin/systemctl stop nginx, /bin/systemctl restart nginx, /bin/systemctl reload nginx, /bin/systemctl status nginx
 Nikhil-VM ALL=(ALL) NOPASSWD: /bin/systemctl daemon-reload
 Nikhil-VM ALL=(ALL) NOPASSWD: /usr/sbin/nginx -t, /usr/bin/nginx -t
 Nikhil-VM ALL=(ALL) NOPASSWD: /bin/journalctl -u cbt-backend*, /bin/journalctl -u cbt-frontend*
-Nikhil-VM ALL=(ALL) NOPASSWD: /usr/bin/fuser -k *
+Nikhil-VM ALL=(ALL) NOPASSWD: /usr/bin/fuser -k *, /bin/fuser -k *

@@ -9,6 +9,7 @@ User=Nikhil-VM
 Group=Nikhil-VM
 WorkingDirectory=/opt/cbt
 Environment="PATH=/opt/cbt/.venv/bin:/usr/local/bin:/usr/bin"
+Environment="PYTHONPATH=/opt/cbt"
 EnvironmentFile=/opt/cbt/.env
 ExecStart=/opt/cbt/.venv/bin/uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --workers 4 --proxy-headers --forwarded-allow-ips="127.0.0.1"
 

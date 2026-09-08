@@ -1,23 +1,24 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# CBT Examination Platform — Professional Production Lifecycle Controller
+# CBT Examination Platform — Production Lifecycle & Architecture Controller
 # ==============================================================================
-# Location: /opt/cbt/scripts/production.sh
 # Target Operational User: Nikhil-VM (Non-Root)
+# Process Management: Dedicated Systemd Units ONLY (No direct background processes)
 #
 # Commands:
-#   ./production.sh              - Interactive Management Console (Menu)
-#   ./production.sh update       - Full 6-stage Atomic Pipeline (git pull, pip, db, build, restart, verify)
-#   ./production.sh deploy       - Alias for 'update'
-#   ./production.sh restart      - Clear rogue port conflicts, restart systemd units, verify health
-#   ./production.sh start        - Start all application services safely
-#   ./production.sh stop         - Graceful shutdown of application services
-#   ./production.sh status       - Display live status of services, ports, and health
-#   ./production.sh health       - Multi-point liveness, readiness & proxy verification
-#   ./production.sh logs         - Stream live backend & frontend logs
-#   ./production.sh backup       - Automated compressed database backup
-#   ./production.sh restore-test - Test restore pipeline in temporary schema
-#   ./production.sh monitor      - Host resources, memory, disk, and connection metrics
+#   ./production.sh               - Interactive Management Console (Menu)
+#   ./production.sh start         - Start systemd application services safely
+#   ./production.sh stop          - Stop all application services and release ports
+#   ./production.sh restart       - Clean port clearance, restart systemd units, verify health
+#   ./production.sh status        - Display live status of services, ports, users, and health
+#   ./production.sh health        - Multi-point liveness, readiness & proxy verification
+#   ./production.sh logs          - Stream live backend & frontend systemd journal logs
+#   ./production.sh update        - 6-stage Atomic Pipeline (git pull, pip, db, build, restart, verify)
+#   ./production.sh deploy        - Alias for 'update'
+#   ./production.sh setup-systemd - Install/refresh systemd unit files & sudoers rules
+#   ./production.sh backup        - Automated compressed database backup
+#   ./production.sh restore-test  - Test restore pipeline in temporary schema
+#   ./production.sh monitor       - Host resources, memory, disk, and connection metrics
 # ==============================================================================
 
 set -uo pipefail
@@ -137,23 +138,85 @@ find_python_interpreter() {
 }
 find_python_interpreter
 
+# ------------------------------------------------------------------------------
+# Native Systemd & Sudoers Setup (Eliminates External Script Dependencies)
+# ------------------------------------------------------------------------------
+install_systemd_and_sudoers() {
+    local target_user="${1:-$DEPLOY_USER}"
+    log_info "Configuring systemd service units and sudoers rules for '$target_user'..."
+
+    local systemd_src="$APP_DIR/deployment/systemd"
+    if [ ! -d "$systemd_src" ]; then
+        log_error "Deployment directory not found at $systemd_src."
+        return 1
+    fi
+
+    # Install systemd service units
+    for unit in cbt-backend.service cbt-frontend.service cbt-backup.service; do
+        if [ -f "$systemd_src/$unit" ]; then
+            $SUDO_CMD cp "$systemd_src/$unit" "/etc/systemd/system/$unit"
+            $SUDO_CMD chmod 644 "/etc/systemd/system/$unit"
+            log_success "Installed /etc/systemd/system/$unit (User=${target_user})"
+        fi
+    done
+
+    if [ -f "$systemd_src/cbt-backup.timer" ]; then
+        $SUDO_CMD cp "$systemd_src/cbt-backup.timer" "/etc/systemd/system/cbt-backup.timer"
+        $SUDO_CMD chmod 644 "/etc/systemd/system/cbt-backup.timer"
+        $SUDO_CMD systemctl enable cbt-backup.timer 2>/dev/null || true
+        $SUDO_CMD systemctl start cbt-backup.timer 2>/dev/null || true
+        log_success "Installed /etc/systemd/system/cbt-backup.timer"
+    fi
+
+    # Install restricted sudoers rule
+    if [ -f "$systemd_src/cbt-sudoers" ]; then
+        $SUDO_CMD cp "$systemd_src/cbt-sudoers" "/etc/sudoers.d/cbt"
+        $SUDO_CMD chmod 0440 "/etc/sudoers.d/cbt"
+        if command -v visudo >/dev/null 2>&1; then
+            if ! $SUDO_CMD visudo -cf "/etc/sudoers.d/cbt" >/dev/null 2>&1; then
+                log_error "Invalid sudoers syntax! Removing /etc/sudoers.d/cbt for security."
+                $SUDO_CMD rm -f "/etc/sudoers.d/cbt"
+                return 1
+            fi
+        fi
+        log_success "Configured restricted sudoers rule at /etc/sudoers.d/cbt"
+    fi
+
+    $SUDO_CMD systemctl daemon-reload
+    $SUDO_CMD systemctl enable cbt-backend cbt-frontend 2>/dev/null || true
+    log_success "Systemd services enabled and ready for non-root management."
+    return 0
+}
+
+# ------------------------------------------------------------------------------
+# Directory Permissions & Hygiene
+# ------------------------------------------------------------------------------
+fix_permissions() {
+    mkdir -p "$APP_DIR/logs" "$APP_DIR/backups" "$APP_DIR/frontend/.next"
+
+    if [ "$EUID" -eq 0 ] && id "$DEPLOY_USER" >/dev/null 2>&1; then
+        chown -R "${DEPLOY_USER}:${DEPLOY_USER}" "$APP_DIR/logs" "$APP_DIR/backups" "$APP_DIR/frontend/.next" 2>/dev/null || true
+        chmod 600 "$ENV_FILE" 2>/dev/null || true
+    else
+        chmod 755 "$APP_DIR/logs" "$APP_DIR/backups" 2>/dev/null || true
+        if [ -f "$ENV_FILE" ]; then
+            chmod 600 "$ENV_FILE" 2>/dev/null || true
+        fi
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Prerequisite Verification & Auto-Provisioning
+# ------------------------------------------------------------------------------
 verify_prerequisites() {
-    # 1. Auto-create runtime directories
+    # 1. Ensure runtime directories exist
     mkdir -p "$APP_DIR/logs" "$APP_DIR/backups" "$APP_DIR/frontend/.next"
     fix_permissions
 
     # 2. Check and auto-provision systemd units & sudoers if missing
     if command -v systemctl >/dev/null 2>&1 && [ ! -f "/etc/systemd/system/cbt-backend.service" ]; then
-        if [ -f "$APP_DIR/scripts/setup-production-user.sh" ]; then
-            log_warn "Systemd service units are not yet installed in /etc/systemd/system/."
-            if [ "$EUID" -eq 0 ]; then
-                log_info "Installing systemd units and sudoers configuration as root..."
-                "$APP_DIR/scripts/setup-production-user.sh" "$DEPLOY_USER" || true
-            elif command -v sudo >/dev/null 2>&1; then
-                log_info "Prompting sudo to install systemd units and sudoers configuration..."
-                sudo "$APP_DIR/scripts/setup-production-user.sh" "$DEPLOY_USER" || true
-            fi
-        fi
+        log_warn "Systemd service units are not yet installed in /etc/systemd/system/."
+        install_systemd_and_sudoers "$DEPLOY_USER" || true
     fi
 
     # 3. Check and auto-provision .env from template if missing
@@ -227,91 +290,235 @@ verify_prerequisites() {
 }
 
 # ------------------------------------------------------------------------------
-# Port Conflict Resolution Helper
+# Port Conflict Resolution Helper (Guarantees Clean Port Release)
 # ------------------------------------------------------------------------------
 free_port() {
     local port="$1"
     local name="${2:-service}"
+    local max_wait=5
 
+    # Find all PIDs holding this port
+    local pids=""
     if command -v fuser >/dev/null 2>&1; then
-        local pids
         pids=$(fuser "${port}/tcp" 2>/dev/null || true)
-        if [ -n "$pids" ]; then
-            log_warn "Port $port ($name) is held by PID(s): $pids. Clearing for clean start..."
-            $SUDO_CMD fuser -k -15 "${port}/tcp" 2>/dev/null || true
-            sleep 1
+    fi
+    if [ -z "$pids" ] && command -v ss >/dev/null 2>&1; then
+        pids=$(ss -lptn "sport = :$port" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | sort -u | tr '\n' ' ' || true)
+    fi
+    if [ -z "$pids" ] && command -v lsof >/dev/null 2>&1; then
+        pids=$(lsof -ti ":$port" 2>/dev/null | tr '\n' ' ' || true)
+    fi
+
+    if [ -n "$pids" ]; then
+        log_warn "Port $port ($name) is currently held by PID(s): $pids. Terminating for clean start..."
+
+        # 1. Send SIGTERM first
+        for pid in $pids; do
+            kill -15 "$pid" 2>/dev/null || $SUDO_CMD kill -15 "$pid" 2>/dev/null || true
+        done
+        sleep 1
+
+        # 2. Force SIGKILL if still holding port
+        if command -v fuser >/dev/null 2>&1; then
             $SUDO_CMD fuser -k -9 "${port}/tcp" 2>/dev/null || true
         fi
-    elif command -v ss >/dev/null 2>&1; then
-        local pids
-        pids=$(ss -lptn "sport = :$port" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | sort -u || true)
-        if [ -n "$pids" ]; then
-            log_warn "Port $port ($name) is held by PID(s): $pids. Terminating..."
-            for pid in $pids; do
-                $SUDO_CMD kill -15 "$pid" 2>/dev/null || true
-            done
-            sleep 1
-            for pid in $pids; do
-                $SUDO_CMD kill -9 "$pid" 2>/dev/null || true
-            done
-        fi
+        for pid in $pids; do
+            kill -9 "$pid" 2>/dev/null || $SUDO_CMD kill -9 "$pid" 2>/dev/null || true
+        done
+        sleep 1
     fi
-}
 
-fix_permissions() {
-    mkdir -p "$APP_DIR/logs" "$APP_DIR/backups" "$APP_DIR/frontend/.next"
-    
-    if [ "$EUID" -eq 0 ] && id "$DEPLOY_USER" >/dev/null 2>&1; then
-        chown -R "${DEPLOY_USER}:${DEPLOY_USER}" "$APP_DIR/logs" "$APP_DIR/backups" "$APP_DIR/frontend/.next" 2>/dev/null || true
-        chmod 600 "$ENV_FILE" 2>/dev/null || true
-    else
-        chmod 755 "$APP_DIR/logs" "$APP_DIR/backups" 2>/dev/null || true
-        if [ -f "$ENV_FILE" ]; then
-            chmod 600 "$ENV_FILE" 2>/dev/null || true
+    # Verify port is truly released
+    while [ $max_wait -gt 0 ]; do
+        local still_listening=false
+        if command -v ss >/dev/null 2>&1; then
+            if ss -lptn "sport = :$port" 2>/dev/null | grep -q ":$port "; then
+                still_listening=true
+            fi
+        elif command -v fuser >/dev/null 2>&1; then
+            if fuser "${port}/tcp" >/dev/null 2>&1; then
+                still_listening=true
+            fi
         fi
-    fi
+
+        if [ "$still_listening" = "false" ]; then
+            return 0
+        fi
+        sleep 1
+        max_wait=$((max_wait - 1))
+    done
+
+    log_error "Port $port ($name) could not be cleared! Process is still active."
+    return 1
 }
 
 # ------------------------------------------------------------------------------
-# Backend Service & Process Health Inspector (Solves Contradictory Status Bug)
+# Backend Service & Process Health Inspector (Authoritative Ownership Matching)
 # ------------------------------------------------------------------------------
 check_backend_status() {
     # Returns:
-    #   0: Healthy (systemd unit active AND port 8000 listening)
+    #   0: Healthy (systemd unit active AND port 8000 listening by the service)
     #   1: Inactive / Stopped (systemd unit inactive and port 8000 closed)
-    #   2: Critical Conflict (Port 8000 listening by rogue process, but systemd unit is INACTIVE)
+    #   2: Critical Conflict (Port 8000 listening by rogue process or systemd unit is INACTIVE)
     #   3: Starting (systemd unit active, waiting for port 8000)
     local service_active=false
     local port_listening=false
     LISTENER_PID=""
     LISTENER_USER=""
     LISTENER_CMD=""
+    SYSTEMD_USER=""
+    SYSTEMD_MAIN_PID="0"
+    SYSTEMD_ACTIVE_STATUS="INACTIVE"
 
     if command -v systemctl >/dev/null 2>&1; then
-        if systemctl is-active --quiet cbt-backend 2>/dev/null; then
+        SYSTEMD_ACTIVE_STATUS=$(systemctl is-active cbt-backend 2>/dev/null || echo "inactive")
+        if [ "$SYSTEMD_ACTIVE_STATUS" = "active" ]; then
             service_active=true
         fi
+        SYSTEMD_MAIN_PID=$(systemctl show -p MainPID --value cbt-backend 2>/dev/null || echo "0")
+        SYSTEMD_USER=$(systemctl show -p User --value cbt-backend 2>/dev/null || echo "unknown")
     fi
 
     if command -v ss >/dev/null 2>&1; then
         if ss -tulpn 2>/dev/null | grep -q ":8000 "; then
             port_listening=true
             LISTENER_PID=$(ss -lptn "sport = :8000" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -n 1 || true)
-            if [ -n "$LISTENER_PID" ]; then
-                LISTENER_USER=$(ps -o user= -p "$LISTENER_PID" 2>/dev/null | tr -d ' ' || echo "unknown")
-                LISTENER_CMD=$(ps -o comm= -p "$LISTENER_PID" 2>/dev/null | tr -d ' ' || echo "unknown")
-            fi
+        fi
+    fi
+    if [ -z "$LISTENER_PID" ] && command -v lsof >/dev/null 2>&1; then
+        LISTENER_PID=$(lsof -ti :8000 2>/dev/null | head -n 1 || true)
+        if [ -n "$LISTENER_PID" ]; then
+            port_listening=true
+        fi
+    fi
+    if [ -z "$LISTENER_PID" ] && command -v fuser >/dev/null 2>&1; then
+        LISTENER_PID=$(fuser 8000/tcp 2>/dev/null | awk '{print $1}' || true)
+        if [ -n "$LISTENER_PID" ]; then
+            port_listening=true
         fi
     fi
 
+    if [ -n "$LISTENER_PID" ]; then
+        LISTENER_USER=$(ps -p "$LISTENER_PID" -o user= 2>/dev/null | tr -d ' ' || echo "unknown")
+        LISTENER_CMD=$(ps -p "$LISTENER_PID" -o comm= 2>/dev/null | tr -d ' ' || echo "unknown")
+    fi
+
     if [ "$service_active" = "true" ] && [ "$port_listening" = "true" ]; then
-        return 0
+        # Check PID correspondence with systemd service
+        local is_service_process=false
+        if [ "$LISTENER_PID" = "$SYSTEMD_MAIN_PID" ]; then
+            is_service_process=true
+        elif [ "$SYSTEMD_MAIN_PID" -gt 0 ] && pgrep -P "$SYSTEMD_MAIN_PID" 2>/dev/null | grep -qw "$LISTENER_PID"; then
+            is_service_process=true
+        elif [ -f "/sys/fs/cgroup/system.slice/cbt-backend.service/cgroup.procs" ]; then
+            if grep -qw "$LISTENER_PID" "/sys/fs/cgroup/system.slice/cbt-backend.service/cgroup.procs" 2>/dev/null; then
+                is_service_process=true
+            fi
+        else
+            if [ "$LISTENER_USER" = "$DEPLOY_USER" ]; then
+                is_service_process=true
+            fi
+        fi
+
+        # Strict security constraint: Process must NOT run as root
+        if [ "$LISTENER_USER" = "root" ]; then
+            return 2  # Security violation: application process running as root!
+        fi
+
+        if [ "$is_service_process" = "true" ]; then
+            return 0  # Genuine healthy systemd process
+        else
+            return 2  # Conflict: Port 8000 held by rogue PID
+        fi
     elif [ "$service_active" = "false" ] && [ "$port_listening" = "true" ]; then
-        return 2
+        return 2  # Critical Conflict: systemd INACTIVE but port 8000 occupied by rogue process
     elif [ "$service_active" = "true" ] && [ "$port_listening" = "false" ]; then
-        return 3
+        return 3  # Starting / port not yet ready
     else
-        return 1
+        return 1  # Cleanly stopped / inactive
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Frontend Service & Process Health Inspector
+# ------------------------------------------------------------------------------
+check_frontend_status() {
+    # Returns:
+    #   0: Healthy (systemd unit active AND port 3000 listening by the service)
+    #   1: Inactive / Stopped (systemd unit inactive and port 3000 closed)
+    #   2: Critical Conflict (Port 3000 listening by rogue process or systemd unit is INACTIVE)
+    #   3: Starting (systemd unit active, waiting for port 3000)
+    local service_active=false
+    local port_listening=false
+    FRONTEND_LISTENER_PID=""
+    FRONTEND_LISTENER_USER=""
+    FRONTEND_USER=""
+    FRONTEND_MAIN_PID="0"
+    FRONTEND_ACTIVE_STATUS="INACTIVE"
+
+    if command -v systemctl >/dev/null 2>&1; then
+        FRONTEND_ACTIVE_STATUS=$(systemctl is-active cbt-frontend 2>/dev/null || echo "inactive")
+        if [ "$FRONTEND_ACTIVE_STATUS" = "active" ]; then
+            service_active=true
+        fi
+        FRONTEND_MAIN_PID=$(systemctl show -p MainPID --value cbt-frontend 2>/dev/null || echo "0")
+        FRONTEND_USER=$(systemctl show -p User --value cbt-frontend 2>/dev/null || echo "unknown")
+    fi
+
+    if command -v ss >/dev/null 2>&1; then
+        if ss -tulpn 2>/dev/null | grep -q ":3000 "; then
+            port_listening=true
+            FRONTEND_LISTENER_PID=$(ss -lptn "sport = :3000" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -n 1 || true)
+        fi
+    fi
+    if [ -z "$FRONTEND_LISTENER_PID" ] && command -v lsof >/dev/null 2>&1; then
+        FRONTEND_LISTENER_PID=$(lsof -ti :3000 2>/dev/null | head -n 1 || true)
+        if [ -n "$FRONTEND_LISTENER_PID" ]; then
+            port_listening=true
+        fi
+    fi
+    if [ -z "$FRONTEND_LISTENER_PID" ] && command -v fuser >/dev/null 2>&1; then
+        FRONTEND_LISTENER_PID=$(fuser 3000/tcp 2>/dev/null | awk '{print $1}' || true)
+        if [ -n "$FRONTEND_LISTENER_PID" ]; then
+            port_listening=true
+        fi
+    fi
+
+    if [ -n "$FRONTEND_LISTENER_PID" ]; then
+        FRONTEND_LISTENER_USER=$(ps -p "$FRONTEND_LISTENER_PID" -o user= 2>/dev/null | tr -d ' ' || echo "unknown")
+    fi
+
+    if [ "$service_active" = "true" ] && [ "$port_listening" = "true" ]; then
+        local is_service_process=false
+        if [ "$FRONTEND_LISTENER_PID" = "$FRONTEND_MAIN_PID" ]; then
+            is_service_process=true
+        elif [ "$FRONTEND_MAIN_PID" -gt 0 ] && pgrep -P "$FRONTEND_MAIN_PID" 2>/dev/null | grep -qw "$FRONTEND_LISTENER_PID"; then
+            is_service_process=true
+        elif [ -f "/sys/fs/cgroup/system.slice/cbt-frontend.service/cgroup.procs" ]; then
+            if grep -qw "$FRONTEND_LISTENER_PID" "/sys/fs/cgroup/system.slice/cbt-frontend.service/cgroup.procs" 2>/dev/null; then
+                is_service_process=true
+            fi
+        else
+            if [ "$FRONTEND_LISTENER_USER" = "$DEPLOY_USER" ]; then
+                is_service_process=true
+            fi
+        fi
+
+        if [ "$FRONTEND_LISTENER_USER" = "root" ]; then
+            return 2  # Security violation: frontend running as root!
+        fi
+
+        if [ "$is_service_process" = "true" ]; then
+            return 0
+        else
+            return 2
+        fi
+    elif [ "$service_active" = "false" ] && [ "$port_listening" = "true" ]; then
+        return 2  # Conflict: systemd inactive but port 3000 occupied
+    elif [ "$service_active" = "true" ] && [ "$port_listening" = "false" ]; then
+        return 3  # Starting
+    else
+        return 1  # Inactive
     fi
 }
 
@@ -321,7 +528,7 @@ check_backend_status() {
 bootstrap_and_migrate_db() {
     log_info "Ensuring PostgreSQL target database 'cbt' exists & applying migrations..."
     export PYTHONPATH="$APP_DIR"
-    
+
     # Run auto-bootstrap engine
     if ! "$PYTHON_CMD" -c "
 import sys
@@ -345,7 +552,7 @@ if not success:
 }
 
 # ------------------------------------------------------------------------------
-# Health Checks & Status
+# Health Checks & Status (Genuinely Authoritative)
 # ------------------------------------------------------------------------------
 cmd_health() {
     local api_url="http://127.0.0.1:8000"
@@ -357,24 +564,40 @@ cmd_health() {
     local backend_state=0
     check_backend_status && backend_state=$? || backend_state=$?
 
-    if [ "$backend_state" -eq 2 ]; then
-        echo -e "  ${BRIGHT_RED}✗ Backend Service Conflict:${RESET} cbt-backend.service is INACTIVE but port 8000 is occupied by rogue PID ${LISTENER_PID} (${LISTENER_USER})!"
+    if [ "$backend_state" -eq 0 ]; then
+        echo -e "  ${BRIGHT_GREEN}✓ Backend Service (systemd):${RESET}  ACTIVE (User: ${SYSTEMD_USER}, MainPID: ${SYSTEMD_MAIN_PID})"
+    elif [ "$backend_state" -eq 2 ]; then
+        echo -e "  ${BRIGHT_RED}✗ Backend Service Conflict:${RESET}   cbt-backend.service is ${SYSTEMD_ACTIVE_STATUS:-INACTIVE}, but port 8000 is occupied by rogue PID ${LISTENER_PID} (User: ${LISTENER_USER})!"
         echo -e "    ${BRIGHT_YELLOW}Run './production.sh restart' to terminate the rogue process and start cbt-backend.${RESET}"
-    elif [ "$backend_state" -eq 1 ]; then
-        echo -e "  ${BRIGHT_RED}✗ Backend Service:${RESET}          cbt-backend.service is INACTIVE (Port 8000 is closed)"
+    elif [ "$backend_state" -eq 3 ]; then
+        echo -e "  ${BRIGHT_YELLOW}! Backend Service:${RESET}            cbt-backend.service is starting (waiting for port 8000)..."
+    else
+        echo -e "  ${BRIGHT_RED}✗ Backend Service (systemd):${RESET}  INACTIVE (Port 8000 is closed)"
     fi
 
-    local liveness_code
+    local frontend_state=0
+    check_frontend_status && frontend_state=$? || frontend_state=$?
+    if [ "$frontend_state" -eq 0 ]; then
+        echo -e "  ${BRIGHT_GREEN}✓ Frontend Service (systemd):${RESET} ACTIVE (User: ${FRONTEND_USER}, MainPID: ${FRONTEND_MAIN_PID})"
+    elif [ "$frontend_state" -eq 2 ]; then
+        echo -e "  ${BRIGHT_RED}✗ Frontend Service Conflict:${RESET}  cbt-frontend.service is ${FRONTEND_ACTIVE_STATUS:-INACTIVE}, but port 3000 is occupied by rogue PID ${FRONTEND_LISTENER_PID} (User: ${FRONTEND_LISTENER_USER})!"
+    elif [ "$frontend_state" -eq 3 ]; then
+        echo -e "  ${BRIGHT_YELLOW}! Frontend Service:${RESET}           cbt-frontend.service is starting (waiting for port 3000)..."
+    else
+        echo -e "  ${BRIGHT_RED}✗ Frontend Service (systemd):${RESET} INACTIVE"
+    fi
+
+    local liveness_code="000"
     liveness_code=$(curl -s -o /dev/null -w "%{http_code}" "$api_url/health" 2>/dev/null || echo "000")
     if [ "$liveness_code" = "200" ] && [ "$backend_state" -eq 0 ]; then
         echo -e "  ${BRIGHT_GREEN}✓ Backend Liveness:${RESET}           HTTP 200 (Active on port 8000, PID: ${LISTENER_PID:-systemd})"
     elif [ "$liveness_code" = "200" ] && [ "$backend_state" -eq 2 ]; then
-        echo -e "  ${BRIGHT_YELLOW}! Backend Liveness:${RESET}           HTTP 200 (Served by ROGUE PROCESS PID ${LISTENER_PID}, NOT systemd!)"
+        echo -e "  ${BRIGHT_RED}✗ Backend Liveness:${RESET}           HTTP 200 (Served by ROGUE PROCESS PID ${LISTENER_PID}, NOT systemd!)"
     else
         echo -e "  ${BRIGHT_RED}✗ Backend Liveness:${RESET}           HTTP $liveness_code (Failed at $api_url/health)"
     fi
 
-    local readiness_code
+    local readiness_code="000"
     readiness_code=$(curl -s -o /dev/null -w "%{http_code}" "$api_url/health/ready" 2>/dev/null || echo "000")
     if [ "$readiness_code" = "200" ]; then
         echo -e "  ${BRIGHT_GREEN}✓ Database Connectivity:${RESET}      HTTP 200 (PostgreSQL Online & Responsive)"
@@ -382,12 +605,12 @@ cmd_health() {
         echo -e "  ${BRIGHT_RED}✗ Database Connectivity:${RESET}      HTTP $readiness_code (Failed at $api_url/health/ready)"
     fi
 
-    local frontend_code
+    local frontend_code="000"
     frontend_code=$(curl -s -o /dev/null -w "%{http_code}" "$frontend_url/" 2>/dev/null || echo "000")
     if [ "$frontend_code" = "200" ] || [ "$frontend_code" = "307" ] || [ "$frontend_code" = "308" ]; then
         echo -e "  ${BRIGHT_GREEN}✓ Next.js Frontend:${RESET}           HTTP $frontend_code (Active on port 3000)"
     else
-        echo -e "  ${BRIGHT_YELLOW}! Next.js Frontend:${RESET}           HTTP $frontend_code (May be compiling or redirecting)"
+        echo -e "  ${BRIGHT_YELLOW}! Next.js Frontend:${RESET}           HTTP $frontend_code"
     fi
 
     local nginx_code="N/A"
@@ -402,11 +625,11 @@ cmd_health() {
     echo -e "${BOLD}${BRIGHT_WHITE}================================================================${RESET}"
     echo ""
 
-    if [ "$backend_state" -eq 0 ] && [ "$liveness_code" = "200" ] && [ "$readiness_code" = "200" ]; then
+    if [ "$backend_state" -eq 0 ] && [ "$frontend_state" -eq 0 ] && [ "$liveness_code" = "200" ] && [ "$readiness_code" = "200" ]; then
         echo -e "${BOLD}${BG_GREEN} SYSTEM STATUS: OPERATIONAL & HEALTHY ${RESET}"
         return 0
-    elif [ "$backend_state" -eq 2 ]; then
-        echo -e "${BOLD}${BG_RED} SYSTEM STATUS: CONFLICT / DEGRADED (Rogue Process Detected on Port 8000) ${RESET}"
+    elif [ "$backend_state" -eq 2 ] || [ "$frontend_state" -eq 2 ]; then
+        echo -e "${BOLD}${BG_RED} SYSTEM STATUS: CONFLICT / DEGRADED (Rogue Process Detected) ${RESET}"
         return 1
     else
         echo -e "${BOLD}${BG_RED} SYSTEM STATUS: DEGRADED — CHECK LOGS VIA './production.sh logs' ${RESET}"
@@ -464,14 +687,25 @@ cmd_status() {
         local backend_state=0
         check_backend_status && backend_state=$? || backend_state=$?
         if [ "$backend_state" -eq 0 ]; then
-            echo -e "    ${BRIGHT_GREEN}[ACTIVE]  ${RESET} cbt-backend (FastAPI Backend, PID: ${LISTENER_PID:-systemd})"
+            echo -e "    ${BRIGHT_GREEN}[ACTIVE]  ${RESET} cbt-backend (FastAPI Backend, PID: ${LISTENER_PID:-systemd}, User: ${SYSTEMD_USER})"
         elif [ "$backend_state" -eq 2 ]; then
-            echo -e "    ${BRIGHT_RED}[INACTIVE]${RESET} cbt-backend ${BRIGHT_RED}(CRITICAL: Port 8000 held by rogue PID ${LISTENER_PID}, User: ${LISTENER_USER})${RESET}"
+            echo -e "    ${BRIGHT_RED}[INACTIVE]${RESET} cbt-backend ${BRIGHT_RED}(CRITICAL CONFLICT: Port 8000 held by rogue PID ${LISTENER_PID}, User: ${LISTENER_USER})${RESET}"
         else
             echo -e "    ${BRIGHT_RED}[INACTIVE]${RESET} cbt-backend"
         fi
 
-        for svc in cbt-frontend nginx postgresql; do
+        # Check frontend
+        local frontend_state=0
+        check_frontend_status && frontend_state=$? || frontend_state=$?
+        if [ "$frontend_state" -eq 0 ]; then
+            echo -e "    ${BRIGHT_GREEN}[ACTIVE]  ${RESET} cbt-frontend (Next.js Frontend, PID: ${FRONTEND_LISTENER_PID:-systemd}, User: ${FRONTEND_USER})"
+        elif [ "$frontend_state" -eq 2 ]; then
+            echo -e "    ${BRIGHT_RED}[INACTIVE]${RESET} cbt-frontend ${BRIGHT_RED}(CRITICAL CONFLICT: Port 3000 held by rogue PID ${FRONTEND_LISTENER_PID}, User: ${FRONTEND_LISTENER_USER})${RESET}"
+        else
+            echo -e "    ${BRIGHT_RED}[INACTIVE]${RESET} cbt-frontend"
+        fi
+
+        for svc in nginx postgresql; do
             if systemctl is-active --quiet "$svc" 2>/dev/null; then
                 echo -e "    ${BRIGHT_GREEN}[ACTIVE]  ${RESET} $svc"
             else
@@ -479,23 +713,17 @@ cmd_status() {
             fi
         done
     else
-        echo "    (systemd not available in this environment)"
+        echo -e "    ${BRIGHT_YELLOW}systemctl not detected.${RESET}"
     fi
 
     echo ""
     echo -e "  ${BOLD}Listening Ports:${RESET}"
-    for port in 80 443 3000 8000 5432; do
-        local desc=""
-        case "$port" in
-            80) desc="HTTP NGINX" ;;
-            443) desc="HTTPS NGINX" ;;
-            3000) desc="Next.js Frontend" ;;
-            8000) desc="FastAPI Backend" ;;
-            5432) desc="PostgreSQL Database" ;;
-        esac
+    for port_info in "80:HTTP (nginx)" "443:HTTPS (nginx)" "3000:Next.js Frontend" "8000:FastAPI Backend" "5432:PostgreSQL"; do
+        local port="${port_info%%:*}"
+        local desc="${port_info#*:}"
         if command -v ss >/dev/null 2>&1; then
             if ss -tulpn 2>/dev/null | grep -q ":$port "; then
-                echo -e "    Port $port ($desc): ${BRIGHT_GREEN}LISTENING${RESET}"
+                echo -e "    Port $port ($desc): ${BRIGHT_GREEN}${BOLD}LISTENING${RESET}"
             else
                 echo -e "    Port $port ($desc): ${DIM}CLOSED${RESET}"
             fi
@@ -506,11 +734,11 @@ cmd_status() {
 }
 
 # ------------------------------------------------------------------------------
-# Start Subcommand
+# Start Subcommand (Strict Systemd Supervision — Zero Manual Background Fallbacks)
 # ------------------------------------------------------------------------------
 cmd_start() {
     log_header "STARTING CBT EXAMINATION PLATFORM"
-    verify_prerequisites || exit 1
+    verify_prerequisites || return 1
 
     # Check if backend systemd service is already active and healthy
     local backend_state=0
@@ -521,113 +749,143 @@ cmd_start() {
         return 0
     fi
 
-    # Free any rogue port before starting systemd
-    free_port 8000 "FastAPI Backend"
-    free_port 3000 "Next.js Frontend"
+    # Free any rogue port listeners before starting systemd services
+    free_port 8000 "FastAPI Backend" || return 1
+    free_port 3000 "Next.js Frontend" || return 1
 
-    bootstrap_and_migrate_db || exit 1
+    bootstrap_and_migrate_db || return 1
     fix_permissions
 
-    if command -v systemctl >/dev/null 2>&1 && [ -f "/etc/systemd/system/cbt-backend.service" ]; then
-        log_info "Starting services via systemd under user '$DEPLOY_USER'..."
-        $SUDO_CMD systemctl daemon-reload 2>/dev/null || true
-        $SUDO_CMD systemctl start cbt-backend
-        $SUDO_CMD systemctl start cbt-frontend 2>/dev/null || true
-        
-        if command -v nginx >/dev/null 2>&1; then
-            if [ ! -f "/etc/nginx/sites-enabled/cbt" ] && [ -f "$APP_DIR/deployment/nginx/cbt.conf" ]; then
-                $SUDO_CMD cp "$APP_DIR/deployment/nginx/cbt.conf" /etc/nginx/sites-available/cbt 2>/dev/null || true
-                $SUDO_CMD ln -sf /etc/nginx/sites-available/cbt /etc/nginx/sites-enabled/ 2>/dev/null || true
-                $SUDO_CMD rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
-            fi
-            if $SUDO_CMD nginx -t 2>/dev/null; then
-                $SUDO_CMD systemctl start nginx || $SUDO_CMD systemctl reload nginx || true
-                log_success "NGINX reverse proxy active."
-            else
-                log_error "NGINX configuration test failed! Check /etc/nginx/sites-enabled/."
-            fi
+    # Services MUST run exclusively through systemd
+    if ! command -v systemctl >/dev/null 2>&1; then
+        log_error "systemctl not found! The application must be supervised exclusively by systemd."
+        return 1
+    fi
+
+    if [ ! -f "/etc/systemd/system/cbt-backend.service" ] || [ ! -f "/etc/systemd/system/cbt-frontend.service" ]; then
+        log_warn "Systemd service units not found in /etc/systemd/system/. Installing now..."
+        install_systemd_and_sudoers || {
+            log_error "Failed to install systemd services. Run: sudo ./production.sh setup-systemd"
+            return 1
+        }
+    fi
+
+    log_info "Starting services via systemd under user '$DEPLOY_USER'..."
+    $SUDO_CMD systemctl daemon-reload 2>/dev/null || true
+    if ! $SUDO_CMD systemctl start cbt-backend; then
+        log_error "Failed to start cbt-backend.service via systemd!"
+        $SUDO_CMD systemctl status cbt-backend --no-pager 2>/dev/null || true
+        return 1
+    fi
+
+    if ! $SUDO_CMD systemctl start cbt-frontend; then
+        log_error "Failed to start cbt-frontend.service via systemd!"
+        $SUDO_CMD systemctl status cbt-frontend --no-pager 2>/dev/null || true
+        return 1
+    fi
+
+    if command -v nginx >/dev/null 2>&1; then
+        if [ ! -f "/etc/nginx/sites-enabled/cbt" ] && [ -f "$APP_DIR/deployment/nginx/cbt.conf" ]; then
+            $SUDO_CMD cp "$APP_DIR/deployment/nginx/cbt.conf" /etc/nginx/sites-available/cbt 2>/dev/null || true
+            $SUDO_CMD ln -sf /etc/nginx/sites-available/cbt /etc/nginx/sites-enabled/ 2>/dev/null || true
+            $SUDO_CMD rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
         fi
-    else
-        log_info "Starting services via direct process supervision..."
-        export PYTHONPATH="$APP_DIR"
-        nohup "$PYTHON_CMD" -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --workers 4 >> "$LOG_DIR/backend.log" 2>&1 &
-        
-        if [ -d "$APP_DIR/frontend" ] && command -v npm >/dev/null 2>&1; then
-            (cd "$APP_DIR/frontend" && nohup npm run start >> "$LOG_DIR/frontend.log" 2>&1 &)
+        if $SUDO_CMD nginx -t 2>/dev/null; then
+            $SUDO_CMD systemctl start nginx 2>/dev/null || $SUDO_CMD systemctl reload nginx 2>/dev/null || true
+            log_success "NGINX reverse proxy active."
+        else
+            log_error "NGINX configuration test failed! Check /etc/nginx/sites-enabled/."
         fi
     fi
 
-    wait_and_verify_health
+    # Authoritative health verification: return non-zero if not healthy
+    wait_and_verify_health || return 1
 }
 
 # ------------------------------------------------------------------------------
-# Stop Subcommand
+# Stop Subcommand (Releases All Application Ports)
 # ------------------------------------------------------------------------------
 cmd_stop() {
     log_header "STOPPING CBT EXAMINATION PLATFORM"
-    if command -v systemctl >/dev/null 2>&1 && [ -f "/etc/systemd/system/cbt-backend.service" ]; then
+    if command -v systemctl >/dev/null 2>&1; then
+        log_info "Stopping systemd service units..."
         $SUDO_CMD systemctl stop cbt-frontend 2>/dev/null || true
         $SUDO_CMD systemctl stop cbt-backend 2>/dev/null || true
     fi
     free_port 8000 "Backend API"
     free_port 3000 "Frontend Web"
-    log_success "All application services stopped safely."
+    log_success "All application services stopped safely and ports released."
+    return 0
 }
 
 # ------------------------------------------------------------------------------
-# Restart Subcommand (Clean & Conflict-Free)
+# Restart Subcommand (Idempotent, Clean & Conflict-Free via Systemd)
 # ------------------------------------------------------------------------------
 cmd_restart() {
     log_header "RESTARTING CBT EXAMINATION PLATFORM SERVICES"
-    verify_prerequisites || exit 1
+    verify_prerequisites || return 1
 
     log_step "1/4: Ensuring database connectivity & schema migrations..."
-    bootstrap_and_migrate_db || exit 1
+    bootstrap_and_migrate_db || return 1
 
     log_step "2/4: Terminating old service units and clearing rogue port listeners..."
-    if command -v systemctl >/dev/null 2>&1 && [ -f "/etc/systemd/system/cbt-backend.service" ]; then
+    if command -v systemctl >/dev/null 2>&1; then
         $SUDO_CMD systemctl stop cbt-frontend 2>/dev/null || true
         $SUDO_CMD systemctl stop cbt-backend 2>/dev/null || true
     fi
-    free_port 8000 "FastAPI Backend"
-    free_port 3000 "Next.js Frontend"
+    free_port 8000 "FastAPI Backend" || return 1
+    free_port 3000 "Next.js Frontend" || return 1
 
-    log_step "3/4: Setting file permissions & launching refreshed services..."
+    log_step "3/4: Setting file permissions & launching refreshed services via systemd..."
     fix_permissions
 
-    if command -v systemctl >/dev/null 2>&1 && [ -f "/etc/systemd/system/cbt-backend.service" ]; then
-        $SUDO_CMD systemctl daemon-reload 2>/dev/null || true
-        $SUDO_CMD systemctl start cbt-backend
-        $SUDO_CMD systemctl start cbt-frontend 2>/dev/null || true
+    if ! command -v systemctl >/dev/null 2>&1; then
+        log_error "systemctl not found! The application must be supervised exclusively by systemd."
+        return 1
+    fi
 
-        if command -v nginx >/dev/null 2>&1; then
-            if [ ! -f "/etc/nginx/sites-enabled/cbt" ] && [ -f "$APP_DIR/deployment/nginx/cbt.conf" ]; then
-                $SUDO_CMD cp "$APP_DIR/deployment/nginx/cbt.conf" /etc/nginx/sites-available/cbt 2>/dev/null || true
-                $SUDO_CMD ln -sf /etc/nginx/sites-available/cbt /etc/nginx/sites-enabled/ 2>/dev/null || true
-                $SUDO_CMD rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
-            fi
-            if $SUDO_CMD nginx -t 2>/dev/null; then
-                $SUDO_CMD systemctl reload nginx 2>/dev/null || $SUDO_CMD systemctl restart nginx 2>/dev/null || true
-            fi
+    if [ ! -f "/etc/systemd/system/cbt-backend.service" ] || [ ! -f "/etc/systemd/system/cbt-frontend.service" ]; then
+        log_warn "Systemd service units not found in /etc/systemd/system/. Installing now..."
+        install_systemd_and_sudoers || {
+            log_error "Failed to install systemd services. Run: sudo ./production.sh setup-systemd"
+            return 1
+        }
+    fi
+
+    $SUDO_CMD systemctl daemon-reload 2>/dev/null || true
+    if ! $SUDO_CMD systemctl restart cbt-backend; then
+        log_error "Failed to restart cbt-backend.service via systemd!"
+        $SUDO_CMD systemctl status cbt-backend --no-pager 2>/dev/null || true
+        return 1
+    fi
+
+    if ! $SUDO_CMD systemctl restart cbt-frontend; then
+        log_error "Failed to restart cbt-frontend.service via systemd!"
+        $SUDO_CMD systemctl status cbt-frontend --no-pager 2>/dev/null || true
+        return 1
+    fi
+
+    if command -v nginx >/dev/null 2>&1; then
+        if [ ! -f "/etc/nginx/sites-enabled/cbt" ] && [ -f "$APP_DIR/deployment/nginx/cbt.conf" ]; then
+            $SUDO_CMD cp "$APP_DIR/deployment/nginx/cbt.conf" /etc/nginx/sites-available/cbt 2>/dev/null || true
+            $SUDO_CMD ln -sf /etc/nginx/sites-available/cbt /etc/nginx/sites-enabled/ 2>/dev/null || true
+            $SUDO_CMD rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
         fi
-    else
-        export PYTHONPATH="$APP_DIR"
-        nohup "$PYTHON_CMD" -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --workers 4 >> "$LOG_DIR/backend.log" 2>&1 &
-        if [ -d "$APP_DIR/frontend" ] && command -v npm >/dev/null 2>&1; then
-            (cd "$APP_DIR/frontend" && nohup npm run start >> "$LOG_DIR/frontend.log" 2>&1 &)
+        if $SUDO_CMD nginx -t 2>/dev/null; then
+            $SUDO_CMD systemctl reload nginx 2>/dev/null || $SUDO_CMD systemctl restart nginx 2>/dev/null || true
         fi
     fi
 
     log_step "4/4: Multi-point live health verification..."
-    wait_and_verify_health
+    wait_and_verify_health || return 1
 }
 
 # ------------------------------------------------------------------------------
-# Deploy / Update Pipeline (6-Stage Comprehensive Automation)
+# Deploy / Update Pipeline (Strict Failure Handling — Zero False Success)
 # ------------------------------------------------------------------------------
 cmd_deploy() {
     log_header "ATOMIC PRODUCTION UPDATE & DEPLOYMENT PIPELINE"
-    verify_prerequisites || exit 1
+    verify_prerequisites || return 1
 
     local skip_backup=false
     local skip_pull=false
@@ -692,7 +950,7 @@ cmd_deploy() {
 
     # Stage 4: Database Auto-Bootstrap & Migrations
     log_step "Stage 4/6: Auto-Bootstrapping Database & Running Migrations..."
-    bootstrap_and_migrate_db || exit 1
+    bootstrap_and_migrate_db || return 1
 
     # Stage 5: Frontend Node Dependencies & Next.js Build
     log_step "Stage 5/6: Compiling Next.js Production Build..."
@@ -704,19 +962,28 @@ cmd_deploy() {
             log_success "Next.js production bundle compiled successfully."
         else
             log_error "Frontend compilation failed! Inspect error messages above."
-            exit 1
+            return 1
         fi
     fi
 
     # Stage 6: Process Recycling & Multi-Point Health Check
     log_step "Stage 6/6: Conflict-Free Process Recycling & Live Health Verification..."
-    cmd_restart
+    if ! cmd_restart; then
+        echo ""
+        log_error "=========================================================="
+        log_error "  ✗ DEPLOYMENT FAILED: HEALTH VERIFICATION DID NOT PASS!"
+        log_error "  System is DEGRADED or in CONFLICT. Inspect logs above."
+        log_error "=========================================================="
+        echo ""
+        return 1
+    fi
 
     echo ""
     log_success "=========================================================="
     log_success "  ✓ DEPLOYMENT PIPELINE COMPLETED SUCCESSFULLY!"
     log_success "=========================================================="
     echo ""
+    return 0
 }
 
 # ------------------------------------------------------------------------------
@@ -733,19 +1000,19 @@ cmd_logs() {
 }
 
 cmd_backup() {
-    verify_prerequisites || exit 1
+    verify_prerequisites || return 1
     log_info "Starting automated PostgreSQL database backup..."
     "$PYTHON_CMD" "$APP_DIR/scripts/backup_db.py"
 }
 
 cmd_restore_test() {
-    verify_prerequisites || exit 1
+    verify_prerequisites || return 1
     log_info "Executing database backup restore test pipeline..."
     "$PYTHON_CMD" "$APP_DIR/scripts/restore_test.py"
 }
 
 cmd_monitor() {
-    verify_prerequisites || exit 1
+    verify_prerequisites || return 1
     "$PYTHON_CMD" "$APP_DIR/scripts/system_monitor.py"
 }
 
@@ -863,9 +1130,12 @@ if [ $# -gt 0 ]; then
         monitor)
             cmd_monitor
             ;;
+        setup|setup-systemd)
+            install_systemd_and_sudoers "$@"
+            ;;
         *)
             echo -e "${BRIGHT_RED}Unknown command: $ACTION${RESET}"
-            echo -e "Usage: $0 {deploy|update|restart|start|stop|status|health|logs|backup|restore-test|monitor}"
+            echo -e "Usage: $0 {start|stop|restart|status|health|logs|update|deploy|setup-systemd|backup|restore-test|monitor}"
             exit 1
             ;;
     esac
